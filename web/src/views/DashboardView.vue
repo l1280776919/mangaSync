@@ -1,9 +1,11 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import api from '@/api'
 import { useAppStore } from '@/store/app'
 import { useIsMobile } from '@/composables/useIsMobile'
+import { useViewActive } from '@/composables/useViewActive'
 import StatCard from '@/components/StatCard.vue'
 import JobProgress from '@/components/JobProgress.vue'
 import LogDialog from '@/components/LogDialog.vue'
@@ -16,13 +18,26 @@ const store = useAppStore()
 /* 手机端：最近完成列表由表格换成卡片 */
 const isMobile = useIsMobile()
 
-const stats = ref(null)
+/* 统计口径统一走 store（bootstrap / 设置页 / 本页共用一份，带 15s 复用窗口） */
+const stats = computed(() => store.stats)
 const loadingStats = ref(false)
 const recentDone = ref([])
 const loadingRecent = ref(false)
 const logVisible = ref(false)
 const logJob = ref(null)
 let recentTimer = null
+
+/** 页面是否可见（keep-alive 缓存后 onUnmounted 不再触发，靠这个开关停掉轮询） */
+const active = useViewActive({
+  onEnter: () => {
+    startTimer()
+    reload()
+  },
+  onLeave: () => {
+    stopTimer()
+    clearTickTimer()
+  }
+})
 
 const activeJobs = computed(() =>
   store.jobList
@@ -39,11 +54,10 @@ const disk = computed(() => stats.value?.disk || {})
 
 const totalSpeed = computed(() => activeJobs.value.reduce((s, j) => s + (Number(j.speedBps) || 0), 0))
 
-async function loadStats() {
+async function loadStats(force = false) {
   loadingStats.value = true
   try {
-    stats.value = await api.stats()
-    store.stats = stats.value
+    await store.loadStats(force ? 0 : undefined)
   } catch (e) {
     /* api.js 已提示 */
   } finally {
@@ -67,13 +81,25 @@ async function onCancel(job) {
   await api.cancelDownload(job.id).then(() => store.loadActiveJobs()).catch(() => {})
 }
 
+/** 失败任务重试：原来没有提示也不刷新列表，点了像没反应 */
+async function onRetry(job) {
+  try {
+    await api.retryDownload(job.id)
+    ElMessage.success('已重新入队')
+    store.loadActiveJobs().catch(() => {})
+    reload()
+  } catch (e) {
+    /* api.js 已提示 */
+  }
+}
+
 function openLogs(job) {
   logJob.value = job
   logVisible.value = true
 }
 
-async function reload() {
-  await Promise.allSettled([loadStats(), loadRecent(), store.loadActiveJobs()])
+async function reload(force = false) {
+  await Promise.allSettled([loadStats(force), loadRecent(), store.loadActiveJobs()])
 }
 
 let tickTimer = null
@@ -81,26 +107,48 @@ let tickTimer = null
 watch(
   () => store.jobTick,
   () => {
+    if (!active.value) return // 已经离开概览页，别再刷
     // 任务状态变化后刷新统计与最近完成列表（做轻量节流）
     if (tickTimer) return
     tickTimer = setTimeout(() => {
       tickTimer = null
-      loadStats()
+      if (!active.value) return
+      loadStats(true)
       loadRecent()
     }, 1200)
   }
 )
 
-onMounted(async () => {
-  await reload()
-  recentTimer = setInterval(() => {
-    loadStats()
-  }, 20000)
-})
+/** 顶栏「刷新」：重载本页数据 */
+watch(
+  () => store.refreshTick,
+  () => {
+    if (active.value) reload(true)
+  }
+)
+
+function startTimer() {
+  if (recentTimer) return
+  recentTimer = setInterval(() => loadStats(), 20000)
+}
+
+function stopTimer() {
+  if (recentTimer) {
+    clearInterval(recentTimer)
+    recentTimer = null
+  }
+}
+
+function clearTickTimer() {
+  if (tickTimer) {
+    clearTimeout(tickTimer)
+    tickTimer = null
+  }
+}
 
 onUnmounted(() => {
-  if (recentTimer) clearInterval(recentTimer)
-  if (tickTimer) clearTimeout(tickTimer)
+  stopTimer()
+  clearTickTimer()
 })
 
 const shortcuts = [
@@ -124,7 +172,7 @@ const shortcuts = [
         <div class="title-actions">
           <el-tag v-if="store.sseConnected" type="success" size="small" effect="light">实时推送中</el-tag>
           <el-tag v-else type="warning" size="small" effect="light">SSE 断开（已降级轮询）</el-tag>
-          <el-button size="small" :loading="loadingStats" @click="reload">刷新数据</el-button>
+          <el-button size="small" :loading="loadingStats" @click="reload(true)">刷新数据</el-button>
           <el-button size="small" text type="primary" @click="store.reconnectEvents()">重连推送</el-button>
         </div>
       </div>
@@ -173,10 +221,10 @@ const shortcuts = [
         :key="job.id"
         :job="job"
         compact
+        :removable="false"
         @cancel="onCancel"
         @logs="openLogs"
-        @retry="(j) => api.retryDownload(j.id).catch(() => {})"
-        @remove="() => {}"
+        @retry="onRetry"
       />
     </div>
 

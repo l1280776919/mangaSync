@@ -145,7 +145,9 @@ func serveReaderImage(w http.ResponseWriter, b []byte, ct string) {
 	_, _ = w.Write(b)
 }
 
-// localChapterDir 找本地章节目录：单章本子就是本子目录；多章按子目录顺序取第 order 个
+// localChapterDir 找本地章节目录：单章本子就是本子目录；多章按目录名的 %03d 前缀匹配 order。
+// 不能再用「排序后的第 N 个子目录」：只要中间有一章下载失败/没下载，order=1 就会返回第 3 章的目录，
+// 页数与图片全是别的章节的内容。匹配逻辑与 api.go 的 findChapterDir 保持一致。
 func (s *Server) localChapterDir(kind, comicID string, order int) (string, bool) {
 	rec, err := s.st.GetComic(kind, comicID)
 	if err != nil || rec == nil || strings.TrimSpace(rec.Path) == "" {
@@ -161,15 +163,12 @@ func (s *Server) localChapterDir(kind, comicID string, order int) (string, bool)
 	if err != nil || !fi.IsDir() {
 		return "", false
 	}
-	subs := subdirsIn(dir)
-	if len(subs) == 0 {
-		if order == 1 {
-			return dir, true
-		}
-		return "", false
+	if found := findChapterDir(dir, order); found != "" {
+		return found, true
 	}
-	if order <= len(subs) {
-		return subs[order-1], true
+	// 单章本：图片直接放在本子目录里（没有章节目录）
+	if len(subdirsIn(dir)) == 0 && order == 1 {
+		return dir, true
 	}
 	return "", false
 }

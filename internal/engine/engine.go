@@ -25,23 +25,58 @@ type Engine struct {
 	running map[int64]context.CancelFunc
 	subs    map[chan []byte]struct{}
 
+	// 按 kind 缓存源实例：http.Transport（连接池）与章节图片内存缓存都挂在实例上，
+	// 每次调用都新建会让 keep-alive 与 10 分钟缓存全部失效。配置指纹变了才重建。
+	srcMu   sync.Mutex
+	srcs    map[string]source.Source
+	srcKeys map[string]string
+
 	scanMu sync.Mutex
 }
 
 func New(st *store.Store, cfg *config.Manager) *Engine {
 	return &Engine{st: st, cfg: cfg,
-		running: map[int64]context.CancelFunc{}, subs: map[chan []byte]struct{}{}}
+		running: map[int64]context.CancelFunc{}, subs: map[chan []byte]struct{}{},
+		srcs: map[string]source.Source{}, srcKeys: map[string]string{}}
+}
+
+// srcFingerprint 源实例相关的配置指纹，任一相关项变更都要重建实例
+func srcFingerprint(kind string, s config.Settings) string {
+	if kind == "pica" {
+		return fmt.Sprintf("pica|%s|%s|%d", s.PicaProxy, s.Quality, s.ImageWorkers)
+	}
+	return fmt.Sprintf("jm|%s|%d", s.JmProxy, s.ImageWorkers)
 }
 
 func (e *Engine) SourceFor(kind string) (source.Source, error) {
 	s := e.cfg.Get()
+	fp := srcFingerprint(kind, s)
+
+	e.srcMu.Lock()
+	defer e.srcMu.Unlock()
+	if src, ok := e.srcs[kind]; ok && e.srcKeys[kind] == fp {
+		return src, nil
+	}
+	var src source.Source
 	switch kind {
 	case "pica":
-		return source.NewPica(s.PicaProxy, s.Quality, s.ImageWorkers), nil
+		src = source.NewPica(s.PicaProxy, s.Quality, s.ImageWorkers)
 	case "jm":
-		return source.NewJM(s.JmProxy, s.ImageWorkers), nil
+		src = source.NewJM(s.JmProxy, s.ImageWorkers)
+	default:
+		return nil, fmt.Errorf("未知的源: %s", kind)
 	}
-	return nil, fmt.Errorf("未知的源: %s", kind)
+	e.srcs[kind] = src
+	e.srcKeys[kind] = fp
+	return src, nil
+}
+
+// InvalidateSources 配置变更后丢弃缓存的源实例（下次 SourceFor 重建）
+func (e *Engine) InvalidateSources() {
+	e.srcMu.Lock()
+	e.srcs = map[string]source.Source{}
+	e.srcKeys = map[string]string{}
+	e.srcMu.Unlock()
 }
 
 func (e *Engine) SourceDir(kind string) string { return e.cfg.SourceDir(kind) }
@@ -64,10 +99,7 @@ func (e *Engine) Login(ctx context.Context, a *store.Account) (*source.AccountIn
 	if err := e.st.SaveLoginOK(a.ID, info.Token, info.Nickname, info.Level, info.FavoritesCount, info.FavoritesMax); err != nil {
 		return nil, err
 	}
-	if a.Password == "" && info.Token != "" {
-		// 用 token 登录的场景（jm 无密码），把 token 存起来
-		_, _ = e.st.ListAccounts()
-	}
+	// token 登录的场景（jm 无密码）上面一次 SaveLoginOK 已经把 token 落库，这里不需要再查一次
 	return info, nil
 }
 
@@ -104,6 +136,11 @@ func (e *Engine) Relogin(ctx context.Context, a *store.Account) (*source.Cred, e
 // ---------------- 任务队列 ----------------
 
 func (e *Engine) Enqueue(job *store.Job) (int64, error) {
+	// 去重：同 kind+comic_id 已在排队/运行则直接复用，避免同一本漫画并发两个任务
+	// （哔咔的 .part 临时目录是按章节名固定的，重复任务会互删互踩）
+	if id, err := e.st.ActiveJobID(job.Kind, job.ComicID); err == nil && id > 0 {
+		return id, nil
+	}
 	id, err := e.st.CreateJob(job)
 	if err != nil {
 		return 0, err
@@ -223,19 +260,26 @@ func (e *Engine) runJob(ctx context.Context, j *store.Job) {
 
 	lastPush := time.Now()
 	prog := source.Progress{}
+	// 进度回调可能来自多个下载协程（禁漫是每个图片 worker 都调、哔咔是 ticker 协程），
+	// 共享的 prog/lastPush 必须加锁，否则数据竞争会让进度数字错乱写库/上 SSE
+	var progMu sync.Mutex
 	h := source.Hooks{
-		Log: func(level, msg string) { e.log(j.ID, level, msg) },
+		JobID: j.ID,
+		Log:   func(level, msg string) { e.log(j.ID, level, msg) },
 		Chapter: func(cs source.ChapterState) {
 			if cs.Err != "" {
 				e.log(j.ID, "error", fmt.Sprintf("章节 %d %s: %s", cs.Order, cs.Title, cs.Err))
 			}
 		},
 		Progress: func(p source.Progress) {
+			progMu.Lock()
 			prog = p
 			if time.Since(lastPush) < 700*time.Millisecond {
+				progMu.Unlock()
 				return
 			}
 			lastPush = time.Now()
+			progMu.Unlock()
 			_ = e.st.UpdateJobProgress(j.ID, "running", p.CurrentChapter, p.ChaptersTotal, p.ChaptersDone,
 				p.ImagesTotal, p.ImagesDone, p.Bytes, p.SpeedBps)
 			e.broadcastEvent("job", map[string]any{
@@ -265,7 +309,7 @@ func (e *Engine) runJob(ctx context.Context, j *store.Job) {
 			}
 		}
 		if chapters == 0 {
-			chapters = countAllChapterDirs(res.Path)
+			chapters = countChapterDirs(res.Path)
 		}
 		chaptersDone = countChapterDirs(res.Path)
 		_ = e.st.UpsertComic(&store.Comic{
@@ -282,11 +326,14 @@ func (e *Engine) runJob(ctx context.Context, j *store.Job) {
 	case dlErr != nil:
 		e.fail(ctx, j, dlErr.Error())
 	default:
-		_ = e.st.UpdateJobProgress(j.ID, "done", "", prog.ChaptersTotal, prog.ChaptersDone,
-			prog.ImagesTotal, prog.ImagesDone, prog.Bytes, 0)
-		_ = e.st.SetJobStatus(j.ID, "done", "")
+		progMu.Lock()
+		final := prog
+		progMu.Unlock()
+		// 最终进度 + 终态一次写库（原来分两次写同一行，且第二次会把 speed_bps 清零）
+		_ = e.st.FinishJobProgress(j.ID, final.CurrentChapter, final.ChaptersTotal, final.ChaptersDone,
+			final.ImagesTotal, final.ImagesDone, final.Bytes)
 		e.log(j.ID, "info", fmt.Sprintf("任务 #%d 完成: %d 章 / %d 张 / %s",
-			j.ID, prog.ChaptersDone, prog.ImagesDone, human(prog.Bytes)))
+			j.ID, final.ChaptersDone, final.ImagesDone, human(final.Bytes)))
 	}
 	e.broadcastEvent("job", map[string]any{"id": j.ID, "status": "refresh"})
 }
@@ -316,11 +363,15 @@ func (e *Engine) Subscribe() chan []byte {
 	return ch
 }
 
+// Unsubscribe 只把订阅者摘掉，**不 close(ch)**：
+// 广播方是在同一个 e.mu 下非阻塞发送的，若这里 close，就会与
+// 「已拷走快照、正在发送」的广播协程竞争 → panic: send on closed channel，
+// 而广播调用点在 runJob 协程里（无 recover）→ 整个进程退出。
+// handler 在 Unsubscribe 之前就已从 select 里 return，不需要靠 close 唤醒。
 func (e *Engine) Unsubscribe(ch chan []byte) {
 	e.mu.Lock()
 	delete(e.subs, ch)
 	e.mu.Unlock()
-	close(ch)
 }
 
 func (e *Engine) broadcastEvent(name string, payload any) {
@@ -330,18 +381,16 @@ func (e *Engine) broadcastEvent(name string, payload any) {
 	}
 	msg := append([]byte("event: "+name+"\ndata: "), b...)
 	msg = append(msg, '\n', '\n')
+	// 发送必须与「摘除订阅者」互斥，否则会往已从 map 删掉但仍被引用的旧 channel 写。
+	// 发送本身是非阻塞的（带 default），持锁发送不会拖慢下载。
 	e.mu.Lock()
-	subs := make([]chan []byte, 0, len(e.subs))
 	for ch := range e.subs {
-		subs = append(subs, ch)
-	}
-	e.mu.Unlock()
-	for _, ch := range subs {
 		select {
 		case ch <- msg:
 		default: // 慢消费者丢弃，避免阻塞下载
 		}
 	}
+	e.mu.Unlock()
 }
 
 func (e *Engine) Broadcast(name string, payload any) { e.broadcastEvent(name, payload) }
@@ -368,15 +417,21 @@ func (e *Engine) SyncAccount(ctx context.Context, accID int64) (int, int, error)
 		}
 	}
 	favs, err := src.Favorites(ctx, cred)
+	var partialErr error
 	if err != nil {
 		if err == source.ErrAuth && acc.Username != "" && acc.Password != "" {
 			if cred2, e2 := e.Relogin(ctx, acc); e2 == nil {
-				favs, err = src.Favorites(ctx, cred2)
+				if f2, e3 := src.Favorites(ctx, cred2); len(f2) > 0 || e3 == nil {
+					favs, err = f2, e3
+				}
 			}
 		}
-		if err != nil {
+		if len(favs) == 0 {
 			return 0, 0, err
 		}
+		// 中途翻页失败（源返回了已取到的部分）：先把这部分入队，最后连同错误一起返回，
+		// 让调用方提示「部分同步」，而不是像以前那样要么整单失败、要么静默当成功
+		partialErr = err
 	}
 	enq, skip := 0, 0
 	for _, c := range favs {
@@ -395,7 +450,7 @@ func (e *Engine) SyncAccount(ctx context.Context, accID int64) (int, int, error)
 		enq++
 	}
 	_ = e.st.TouchSync(acc.ID)
-	return enq, skip, nil
+	return enq, skip, partialErr
 }
 
 // SyncAll 供定时任务调用
@@ -462,7 +517,7 @@ func (e *Engine) ScanLibrary() (found, added int, err error) {
 				added++
 			}
 			imgs, bytes := dirStats(dir)
-			chapters, chaptersDone := countAllChapterDirs(dir), countChapterDirs(dir)
+			chapters, chaptersDone := countChapterDirs(dir), countChapterDirs(dir)
 			if chapters == 0 && imgs > 0 {
 				// 单章本：图片直接放在本子目录里
 				chapters, chaptersDone = 1, 1
@@ -519,10 +574,6 @@ func countChapterDirs(dir string) int {
 		}
 	}
 	return n
-}
-
-func countAllChapterDirs(dir string) int {
-	return countChapterDirs(dir)
 }
 
 func dirStats(dir string) (int, int64) {

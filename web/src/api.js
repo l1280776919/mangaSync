@@ -7,6 +7,7 @@ import { clearSession, notifyUnauthorized } from '@/store/auth'
  * - 非 2xx 时读取 {"error":"..."} 并用 ElMessage 报错，然后抛出 Error
  * - query 里 undefined / null / '' 的参数自动丢弃
  * - 认证：登录态由 HttpOnly cookie（ms_session）维持，前端不需要手动带 token
+ * - 列表类接口支持传 signal（AbortController）：视图层用它做竞态保护与超时中断
  * - 401 → 清登录态并跳登录页（/api/auth/login、/api/auth/me 自身除外，避免死循环）
  * - 403 + mustChangePassword → 跳改密页
  */
@@ -131,7 +132,7 @@ export const api = {
 
   // 健康检查（始终免认证，探活用）
   health: () => request('/health', { silent: true }),
-  stats: () => request('/stats'),
+  stats: (signal) => request('/stats', { signal }),
 
   /* ---------------- 认证（登录页 + 服务端会话 + 首次强制改密） ---------------- */
 
@@ -158,7 +159,7 @@ export const api = {
   saveSettings: (patch) => request('/settings', { method: 'PUT', body: patch }),
 
   // 账号
-  listAccounts: () => request('/accounts'),
+  listAccounts: (signal) => request('/accounts', { signal }),
   createAccount: (body) => request('/accounts', { method: 'POST', body }),
   updateAccount: (id, patch) => request(`/accounts/${id}`, { method: 'PATCH', body: patch }),
   deleteAccount: (id) => request(`/accounts/${id}`, { method: 'DELETE' }),
@@ -166,8 +167,8 @@ export const api = {
   syncAccount: (id) => request(`/accounts/${id}/sync`, { method: 'POST' }),
 
   // 收藏
-  favorites: (accountId, { keyword, page = 1, pageSize = 20 } = {}) =>
-    request(`/accounts/${accountId}/favorites`, { query: { keyword, page, pageSize } }),
+  favorites: (accountId, { keyword, page = 1, pageSize = 20, signal } = {}) =>
+    request(`/accounts/${accountId}/favorites`, { query: { keyword, page, pageSize }, signal }),
   addFavorite: (accountId, comicId) =>
     request(`/accounts/${accountId}/favorites`, { method: 'POST', body: { comicId } }),
   removeFavorite: (accountId, comicId) =>
@@ -183,12 +184,12 @@ export const api = {
   coverUrl: (kind, comicId) => `${BASE}/comics/${kind}/${encodeURIComponent(comicId)}/cover`,
 
   // 搜索
-  search: ({ kind, keyword, page = 1, pageSize = 20, accountId, sort } = {}) =>
-    request('/search', { query: { kind, keyword, page, pageSize, accountId, sort } }),
+  search: ({ kind, keyword, page = 1, pageSize = 20, accountId, sort, signal } = {}) =>
+    request('/search', { query: { kind, keyword, page, pageSize, accountId, sort }, signal }),
 
   // 下载任务
-  listDownloads: ({ status, page = 1, pageSize = 20 } = {}) =>
-    request('/downloads', { query: { status, page, pageSize } }),
+  listDownloads: ({ status, page = 1, pageSize = 20, signal } = {}) =>
+    request('/downloads', { query: { status, page, pageSize }, signal }),
   createDownload: ({ kind, accountId, comicId, title, chapters, all }) =>
     request('/downloads', { method: 'POST', body: { kind, accountId, comicId, title, chapters, all } }),
   cancelDownload: (id) => request(`/downloads/${id}/cancel`, { method: 'POST' }),
@@ -197,8 +198,8 @@ export const api = {
   downloadLogs: (id) => request(`/downloads/${id}/logs`, { silent: true }),
 
   // 漫画库
-  library: ({ kind, keyword, page = 1, pageSize = 20, sort } = {}) =>
-    request('/library', { query: { kind, keyword, page, pageSize, sort } }),
+  library: ({ kind, keyword, page = 1, pageSize = 20, sort, signal } = {}) =>
+    request('/library', { query: { kind, keyword, page, pageSize, sort }, signal }),
   deleteLibrary: (id, files = false) =>
     request(`/library/${id}`, { method: 'DELETE', query: { files } }),
   scanLibrary: () => request('/library/scan', { method: 'POST' })

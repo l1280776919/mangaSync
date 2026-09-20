@@ -1,9 +1,11 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api'
 import { useAppStore } from '@/store/app'
 import { useIsMobile } from '@/composables/useIsMobile'
+import { useLatestRequest } from '@/composables/useLatestRequest'
+import { useViewActive } from '@/composables/useViewActive'
 import JobProgress from '@/components/JobProgress.vue'
 import LogDialog from '@/components/LogDialog.vue'
 import KindTag from '@/components/KindTag.vue'
@@ -12,6 +14,7 @@ import StatusTag from '@/components/StatusTag.vue'
 import {
   JOB_STATUS,
   formatBytes,
+  formatElapsed,
   formatSpeed,
   jobProgress
 } from '@/utils/format'
@@ -47,21 +50,29 @@ const liveItems = computed(() => {
   return [...map.values()].sort((a, b) => (b.id || 0) - (a.id || 0))
 })
 
+/** 列表请求：只认最后一次（连点刷新 / 改状态筛选不会被旧响应覆盖） */
+const req = useLatestRequest()
+
 async function load() {
+  const { my, signal } = req.begin()
   loading.value = true
   try {
     const res = await api.listDownloads({
       status: status.value || undefined,
       page: page.value,
-      pageSize: pageSize.value
+      pageSize: pageSize.value,
+      signal
     })
+    if (!req.isCurrent(my)) return
     items.value = res?.items || []
     total.value = Number(res?.total) || Number(items.value.length) || 0
   } catch (e) {
+    if (e?.name === 'AbortError' || !req.isCurrent(my)) return
     items.value = []
     total.value = 0
   } finally {
-    loading.value = false
+    req.end()
+    if (req.isCurrent(my)) loading.value = false
   }
 }
 
@@ -121,24 +132,43 @@ function onPageChange() {
   load()
 }
 
+/* keep-alive 缓存后 onMounted 只跑一次：切回任务页重新拉一次列表 */
+const active = useViewActive({
+  onEnter: () => {
+    load()
+    store.loadActiveJobs().catch(() => {})
+  },
+  onLeave: () => {
+    if (refreshTimer) {
+      clearTimeout(refreshTimer)
+      refreshTimer = null
+    }
+  }
+})
+
 // SSE 推送到达时，如果当前看的是实时状态（或全部），做节流刷新列表补齐总数
 let refreshTimer = null
 watch(
   () => store.jobTick,
   () => {
-    if (!autoRefresh.value) return
+    // 页面被 keep-alive 缓存时也要停：人不在这里就不该每 2.5s 拉一次 /downloads
+    if (!active.value || !autoRefresh.value) return
     if (refreshTimer) return
     refreshTimer = setTimeout(() => {
       refreshTimer = null
+      if (!active.value) return
       load()
     }, 2500)
   }
 )
 
-onMounted(async () => {
-  await load()
-  store.loadActiveJobs().catch(() => {})
-})
+/** 顶栏「刷新」 */
+watch(
+  () => store.refreshTick,
+  () => {
+    if (active.value) load()
+  }
+)
 
 const activeCount = computed(
   () => liveItems.value.filter((j) => j.status === 'running' || j.status === 'queued').length
@@ -147,17 +177,6 @@ const totalSpeed = computed(() =>
   liveItems.value.reduce((s, j) => s + (j.status === 'running' ? Number(j.speedBps) || 0 : 0), 0)
 )
 
-/** 表格里的「耗时」列 */
-function elapsedText(row) {
-  const s = new Date(row.startedAt).getTime()
-  const e = row.finishedAt ? new Date(row.finishedAt).getTime() : Date.now()
-  if (!Number.isFinite(s) || !Number.isFinite(e)) return '—'
-  const sec = Math.max(0, Math.floor((e - s) / 1000))
-  if (sec < 60) return `${sec} 秒`
-  const m = Math.floor(sec / 60)
-  if (m < 60) return `${m} 分 ${sec % 60} 秒`
-  return `${Math.floor(m / 60)} 小时 ${m % 60} 分`
-}
 </script>
 
 <template>
@@ -258,7 +277,7 @@ function elapsedText(row) {
       <el-table-column label="耗时" width="110">
         <template #default="{ row }">
           <span v-if="!row.startedAt">—</span>
-          <span v-else>{{ elapsedText(row) }}</span>
+          <span v-else>{{ formatElapsed(row.startedAt, row.finishedAt) }}</span>
         </template>
       </el-table-column>
       <el-table-column label="错误信息" min-width="160">

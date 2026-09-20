@@ -17,9 +17,26 @@ const (
 	sessionTTL    = 30 * 24 * time.Hour
 )
 
+// ctxKey 请求上下文 key 类型
 type ctxKey string
 
 const ctxSession ctxKey = "mangasync.session"
+
+// cookieSecure 决定会话 cookie 是否带 Secure。
+// 公网入口是 Cloudflare 终结 TLS（客户端到 CF 是 https），此时 Cookie 必须带 Secure，
+// 否则浏览器会把它当作明文 cookie：一次 http 请求/一次混合内容就可能把 30 天有效的
+// 会话 token 明文发出去，拿到即完全冒充管理员。
+// 但内网是 http://<nas>:8787 直连，无条件 Secure 会让内网登录直接丢会话
+// （浏览器不会在 http 上保存/回传 Secure cookie），所以只在确实走 https 时启用：
+// 判断依据是 TLS 直连（r.TLS != nil）或前置代理声明的 X-Forwarded-Proto: https。
+// 取舍：内网明文 http 访问时 cookie 仍非 Secure。要彻底封死这条路径，
+// 需把服务本身只跑在 TLS 后面（或在反代上强制 https 跳转）。
+func cookieSecure(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+}
 
 // sessionFrom 从请求上下文取会话（由 SessionAuth 注入）
 func sessionFrom(r *http.Request) *store.Session {
@@ -131,6 +148,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: token, Path: "/",
 		HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		Secure: cookieSecure(r),
 		MaxAge: int(sessionTTL.Seconds()),
 	})
 	writeJSON(w, 200, map[string]any{
@@ -148,7 +166,7 @@ func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: "", Path: "/",
-		HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: -1,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: cookieSecure(r), MaxAge: -1,
 	})
 	writeJSON(w, 200, map[string]any{"ok": true})
 }

@@ -1,11 +1,12 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import api, { authErrorMessage } from '@/api'
 import { useAppStore } from '@/store/app'
 import { auth } from '@/store/auth'
 import { changePassword, logout } from '@/composables/useAuth'
 import { useIsMobile } from '@/composables/useIsMobile'
+import { useViewActive } from '@/composables/useViewActive'
 import StatCard from '@/components/StatCard.vue'
 import { QUALITY_OPTIONS, formatBytes, formatTime } from '@/utils/format'
 
@@ -230,6 +231,19 @@ function reset() {
 onMounted(async () => {
   await Promise.allSettled([load(), loadHealth(), loadAccount(), store.loadStats()])
 })
+
+/* keep-alive：离开页面时标记为不可见，顶栏「刷新」只作用在当前页 */
+const active = useViewActive()
+
+/** 顶栏「刷新」：重新读设置 / 健康状态 / 登录态（表单里没保存的编辑会被覆盖） */
+watch(
+  () => store.refreshTick,
+  () => {
+    if (!active.value) return
+    Promise.allSettled([load(), loadHealth(), loadAccount()])
+    ElMessage.info('已重新从后端读取')
+  }
+)
 </script>
 
 <template>

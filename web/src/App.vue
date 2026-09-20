@@ -20,16 +20,21 @@ const AUTH_PAGES = ['/login', '/change-password']
 const isAuthPage = computed(() => route.meta?.bare === true || AUTH_PAGES.includes(route.path))
 const username = computed(() => auth.user?.username || '未登录')
 
-// 导航顺序显式声明（router.getRoutes() 的顺序不可靠）
-const MENU = [
-  { path: '/dashboard', title: '概览', icon: 'Odometer' },
-  { path: '/accounts', title: '账号', icon: 'User' },
-  { path: '/favorites', title: '收藏', icon: 'Star' },
-  { path: '/search', title: '搜索', icon: 'Search' },
-  { path: '/downloads', title: '任务', icon: 'Download' },
-  { path: '/library', title: '漫画库', icon: 'Collection' },
-  { path: '/settings', title: '设置', icon: 'Setting' }
+// 导航顺序显式声明（router.getRoutes() 的顺序不可靠）；
+// 标题/图标统一读 router 的 meta，新增页面只改 router.js 一处
+const NAV_PATHS = [
+  '/dashboard',
+  '/accounts',
+  '/favorites',
+  '/search',
+  '/downloads',
+  '/library',
+  '/settings'
 ]
+const MENU = NAV_PATHS.map((path) => {
+  const { meta } = router.resolve(path)
+  return { path, title: meta.title || path, icon: meta.icon }
+})
 
 const activePath = computed(() => route.path)
 const pageTitle = computed(() => route.meta?.title || '概览')
@@ -200,7 +205,7 @@ onMounted(async () => {
               <span class="hide-xs">{{ runningCount }} 进行中</span>
             </el-button>
           </el-tooltip>
-          <el-button text :icon="'Refresh'" @click="store.loadStats().catch(() => {})">
+          <el-button text :icon="'Refresh'" @click="store.triggerRefresh()">
             <span class="hide-xs">刷新</span>
           </el-button>
         </div>

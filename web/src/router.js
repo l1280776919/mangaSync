@@ -97,6 +97,8 @@ setUnauthorizedHandler(({ mustChangePassword: forced } = {}) => {
     return
   }
 
+  // 会话真的失效了：顺手作废 me 的 TTL 缓存，别拿旧结果放行
+  resetMeCache()
   clearSession()
   if (current.path === LOGIN_PATH) return // 已经在登录页，不重复跳
   const redirect = current.fullPath && current.fullPath !== '/' && current.path !== HOME_PATH
@@ -109,8 +111,28 @@ setUnauthorizedHandler(({ mustChangePassword: forced } = {}) => {
  * 全局守卫
  * ------------------------------------------------------------------ */
 
+/**
+ * me 的 TTL 缓存：60s 内认为登录态没变。
+ * 之前每次导航（翻一章漫画也是 replace 跳转）都要 await 一次 /api/auth/me，
+ * 慢链路下就是几百毫秒的公网往返。
+ */
+const ME_TTL = 60000
+let meAt = 0
+
 /** 并发导航（首屏 + 重定向）只发一次 me */
 let meInflight = null
+
+/** 登出 / 401 后调用：作废 me 缓存，下一次导航重新问后端 */
+export function resetMeCache() {
+  meAt = 0
+  meInflight = null
+}
+
+/** TTL 内的登录态（过期返回 null） */
+function cachedUser() {
+  if (!auth.user) return null
+  return Date.now() - meAt < ME_TTL ? auth.user : null
+}
 
 function fetchMe() {
   if (!meInflight) {
@@ -119,6 +141,15 @@ function fetchMe() {
     })
   }
   return meInflight
+}
+
+/** 取登录态：TTL 内复用缓存，过期才真的请求一次 */
+async function ensureMe() {
+  if (cachedUser()) return auth.user
+  const me = await fetchMe()
+  meAt = Date.now()
+  setSession(me)
+  return me
 }
 
 function loginRedirect(to) {
@@ -132,19 +163,22 @@ router.beforeEach(async (to) => {
   const isChangePw = to.path === CHANGE_PASSWORD_PATH
 
   // 已知登录态且不欠改密，访问登录页直接回首页（少打一次 me）
-  if (isLogin && auth.user && !auth.user.mustChangePassword) return { path: HOME_PATH }
+  const known = cachedUser()
+  if (isLogin && known && !known.mustChangePassword) return { path: HOME_PATH }
 
   let me
   try {
-    me = await fetchMe()
+    me = await ensureMe()
   } catch (e) {
-    // 401（未登录）或网络错误（后端没起来）都降级到登录页
+    // 网络 / 隧道抖动（status=0）不是会话失效：放行当前页，
+    // 让 api.js 的 401 兜底（否则 Cloudflare 隧道抖一次就把人踢出正在看的页面）
+    if (!Number(e?.status)) return true
+    // 401（未登录）等明确的鉴权失败才降级到登录页
+    resetMeCache()
     clearSession()
     if (isLogin) return true
     return loginRedirect(to)
   }
-
-  setSession(me)
 
   // 已登录：登录页没意义
   if (isLogin) return { path: me.mustChangePassword ? CHANGE_PASSWORD_PATH : HOME_PATH }

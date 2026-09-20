@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '@/api'
 
@@ -11,7 +11,34 @@ export function useDownloadActions(getAccountId) {
   const pickerComic = ref(null)
   const detailVisible = ref(false)
   const detailComic = ref(null)
-  const busy = ref(false)
+  /**
+   * 正在下载的 comicId 集合：点一张卡的「下载」只让这一张转圈。
+   * 以前是一个全局 busy，点任意一张卡所有卡片一起转圈（页面看起来像卡死）。
+   */
+  const busyIds = ref(new Set())
+  /** 批量 / 弹窗提交的整体状态（按钮级别的 loading） */
+  const submitting = ref(false)
+
+  const busy = computed(() => submitting.value || busyIds.value.size > 0)
+
+  const keyOf = (item) => String(item?.comicId ?? '')
+
+  function markBusy(id) {
+    const s = new Set(busyIds.value)
+    s.add(String(id))
+    busyIds.value = s
+  }
+
+  function unmarkBusy(id) {
+    const s = new Set(busyIds.value)
+    s.delete(String(id))
+    busyIds.value = s
+  }
+
+  /** 这张卡是否正在下载（模板里给 ComicCard 的 :busy 用） */
+  function isBusy(item) {
+    return busyIds.value.has(keyOf(item))
+  }
 
   function accountId(payload) {
     return payload?.accountId ?? getAccountId?.() ?? undefined
@@ -19,7 +46,8 @@ export function useDownloadActions(getAccountId) {
 
   /** 直接整本入队 */
   async function downloadWhole(item, { silent = false } = {}) {
-    busy.value = true
+    const id = keyOf(item)
+    markBusy(id)
     try {
       const res = await api.createDownload({
         kind: item.kind,
@@ -36,7 +64,7 @@ export function useDownloadActions(getAccountId) {
       // api.js 已弹出错误提示
       return null
     } finally {
-      busy.value = false
+      unmarkBusy(id)
     }
   }
 
@@ -61,7 +89,7 @@ export function useDownloadActions(getAccountId) {
   async function submitPicker(payload) {
     const c = pickerComic.value
     if (!c) return null
-    busy.value = true
+    submitting.value = true
     try {
       const res = await api.createDownload({
         kind: c.kind,
@@ -76,31 +104,39 @@ export function useDownloadActions(getAccountId) {
     } catch (e) {
       return null
     } finally {
-      busy.value = false
+      submitting.value = false
     }
   }
 
   /** 批量整本下载 */
   async function downloadMany(items) {
     if (!items?.length) return
-    busy.value = true
+    submitting.value = true
+    for (const it of items) markBusy(keyOf(it))
     let ok = 0
     let fail = 0
-    for (const it of items) {
-      try {
-        await api.createDownload({
-          kind: it.kind,
-          accountId: accountId(it),
-          comicId: String(it.comicId),
-          title: it.title || undefined,
-          all: true
-        })
-        ok++
-      } catch (e) {
-        fail++
+    try {
+      for (const it of items) {
+        try {
+          await api.createDownload({
+            kind: it.kind,
+            accountId: accountId(it),
+            comicId: String(it.comicId),
+            title: it.title || undefined,
+            all: true
+          })
+          ok++
+        } catch (e) {
+          fail++
+        } finally {
+          // 一个下载完就点亮它自己的卡片，不必等整批结束
+          unmarkBusy(keyOf(it))
+        }
       }
+    } finally {
+      submitting.value = false
+      for (const it of items) unmarkBusy(keyOf(it))
     }
-    busy.value = false
     if (ok && !fail) ElMessage.success(`已加入下载队列：${ok} 个`)
     else if (ok && fail) ElMessage.warning(`成功 ${ok} 个，失败 ${fail} 个`)
     else if (fail) ElMessage.error(`全部失败（${fail} 个）`)
@@ -112,6 +148,8 @@ export function useDownloadActions(getAccountId) {
     detailVisible,
     detailComic,
     busy,
+    busyIds,
+    isBusy,
     downloadWhole,
     downloadMany,
     openPicker,
@@ -119,3 +157,5 @@ export function useDownloadActions(getAccountId) {
     submitPicker
   }
 }
+
+export default useDownloadActions

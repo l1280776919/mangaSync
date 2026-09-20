@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -102,6 +101,37 @@ func intQuery(r *http.Request, key string, def int) int {
 	return def
 }
 
+// pageParams 解析并夹取分页参数。
+// page<1 会让切片起点变成负数（favs[-50:0] → slice bounds out of range panic）；
+// pageSize<=0 传给 SQLite 会被当作 LIMIT -1 = 无限制（一次返回整个库）。
+func pageParams(r *http.Request, defSize int) (page, size int) {
+	page = intQuery(r, "page", 1)
+	size = intQuery(r, "pageSize", defSize)
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 || size > 200 {
+		size = defSize
+	}
+	return page, size
+}
+
+// pageBounds 把 (page,size) 夹成合法的切片区间，越界一律收敛到 [0,total]
+func pageBounds(total, page, size int) (int, int) {
+	start := (page - 1) * size
+	if start > total {
+		start = total
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + size
+	if end > total {
+		end = total
+	}
+	return start, end
+}
+
 func (s *Server) account(r *http.Request) (*store.Account, error) {
 	id, err := idOf(r, "id")
 	if err != nil {
@@ -110,13 +140,15 @@ func (s *Server) account(r *http.Request) (*store.Account, error) {
 	return s.st.GetAccount(id)
 }
 
-// accountFor 保证登录态可用（失效则自动重登）
-func (s *Server) accountFor(a *store.Account) (*store.Account, *source.Cred, source.Source, error) {
+// accountFor 保证登录态可用（失效则自动重登）。ctx 跟随请求，客户端断开时上游登录会被取消
+func (s *Server) accountFor(r *http.Request, a *store.Account) (*store.Account, *source.Cred, source.Source, error) {
 	src, err := s.eng.SourceFor(a.Kind)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	cred, err := s.eng.EnsureCred(rctx(), a)
+	ctx, cancel := ctxTimeout(r, 3*time.Minute)
+	defer cancel()
+	cred, err := s.eng.EnsureCred(ctx, a)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -149,6 +181,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "保存设置失败: %v", err)
 		return
 	}
+	// 代理/清晰度/并发相关的设置变了就丢掉缓存的源实例（连接池与图片缓存跟着重建）
+	s.eng.InvalidateSources()
 	writeJSON(w, 200, out)
 }
 
@@ -190,7 +224,7 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	acc, _ := s.st.GetAccount(id)
-	ctx, cancel := rctxTimeout(60 * time.Second)
+	ctx, cancel := ctxTimeout(r, 60*time.Second)
 	defer cancel()
 	if _, err := s.eng.Login(ctx, acc); err != nil {
 		_ = s.st.SaveLoginErr(id, err.Error())
@@ -237,7 +271,7 @@ func (s *Server) patchAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	if user != "" || pass != "" {
 		acc, _ = s.st.GetAccount(acc.ID)
-		ctx, cancel := rctxTimeout(60 * time.Second)
+		ctx, cancel := ctxTimeout(r, 60*time.Second)
 		defer cancel()
 		_, _ = s.eng.Login(ctx, acc)
 	}
@@ -264,7 +298,7 @@ func (s *Server) loginAccount(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "%v", err)
 		return
 	}
-	ctx, cancel := rctxTimeout(90 * time.Second)
+	ctx, cancel := ctxTimeout(r, 90*time.Second)
 	defer cancel()
 	if _, err := s.eng.Login(ctx, acc); err != nil {
 		writeErr(w, 400, "%v", err)
@@ -280,10 +314,15 @@ func (s *Server) syncAccount(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "%v", err)
 		return
 	}
-	ctx, cancel := rctxTimeout(120 * time.Second)
+	ctx, cancel := ctxTimeout(r, 120*time.Second)
 	defer cancel()
 	enq, skip, err := s.eng.SyncAccount(ctx, acc.ID)
 	if err != nil {
+		// 部分同步：已经入队了一部分（源中途翻页失败），把数字一起告诉前端
+		if enq > 0 || skip > 0 {
+			writeErr(w, 400, "部分同步：已入队 %d、跳过 %d，但 %v", enq, skip, err)
+			return
+		}
 		writeErr(w, 400, "同步失败: %v", err)
 		return
 	}
@@ -291,7 +330,7 @@ func (s *Server) syncAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) syncAll(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := rctxTimeout(300 * time.Second)
+	ctx, cancel := ctxTimeout(r, 300*time.Second)
 	defer cancel()
 	enq, skip, err := s.eng.SyncAll(ctx)
 	if err != nil {
@@ -323,20 +362,25 @@ func (s *Server) favorites(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "%v", err)
 		return
 	}
-	_, cred, src, err := s.accountFor(acc)
+	_, cred, src, err := s.accountFor(r, acc)
 	if err != nil {
 		writeErr(w, 400, "%v", err)
 		return
 	}
-	favs, err := src.Favorites(rctx(), cred)
+	fctx, fcancel := ctxTimeout(r, 3*time.Minute)
+	defer fcancel()
+	favs, err := src.Favorites(fctx, cred)
 	if err != nil {
-		if err == source.ErrAuth {
-			_ = s.st.SaveLoginErr(acc.ID, "登录态失效")
+		// 第 1 页就失败 → 没有任何数据可给；中途失败 → 源会返回已取到的部分，
+		// 这里带着部分结果继续（避免「收藏多的账号拉一半就整页报错」）
+		if len(favs) == 0 {
+			if err == source.ErrAuth {
+				_ = s.st.SaveLoginErr(acc.ID, "登录态失效")
+			}
+			writeErr(w, 400, "%v", err)
+			return
 		}
-		writeErr(w, 400, "%v", err)
-		return
 	}
-	s.decorate(favs)
 
 	kw := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("keyword")))
 	if kw != "" {
@@ -349,17 +393,12 @@ func (s *Server) favorites(w http.ResponseWriter, r *http.Request) {
 		}
 		favs = filtered
 	}
-	page := intQuery(r, "page", 1)
-	size := intQuery(r, "pageSize", 50)
+	page, size := pageParams(r, 50)
 	total := len(favs)
-	start := (page - 1) * size
-	if start > total {
-		start = total
-	}
-	end := start + size
-	if end > total {
-		end = total
-	}
+	start, end := pageBounds(total, page, size)
+	// 只给当前页补本地下载状态：原来在分页前对「全量收藏」逐条查库
+	// （SQLite 是单连接串行，2000 条收藏 = 2000 次查询，翻第 2 页还要重跑一遍）
+	s.decorate(favs[start:end])
 	writeJSON(w, 200, map[string]any{
 		"total": total, "page": page, "pageSize": size, "items": favs[start:end],
 	})
@@ -378,12 +417,14 @@ func (s *Server) addFavorite(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "comicId 不能为空")
 		return
 	}
-	_, cred, src, err := s.accountFor(acc)
+	_, cred, src, err := s.accountFor(r, acc)
 	if err != nil {
 		writeErr(w, 400, "%v", err)
 		return
 	}
-	if err := src.AddFavorite(rctx(), cred, req.ComicID); err != nil {
+	actx, acancel := ctxTimeout(r, 3*time.Minute)
+	defer acancel()
+	if err := src.AddFavorite(actx, cred, req.ComicID); err != nil {
 		writeErr(w, 400, "加入收藏失败: %v", err)
 		return
 	}
@@ -397,12 +438,14 @@ func (s *Server) delFavorite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	comicID := r.PathValue("comicId")
-	_, cred, src, err := s.accountFor(acc)
+	_, cred, src, err := s.accountFor(r, acc)
 	if err != nil {
 		writeErr(w, 400, "%v", err)
 		return
 	}
-	if err := src.DelFavorite(rctx(), cred, comicID); err != nil {
+	dctx, dcancel := ctxTimeout(r, 3*time.Minute)
+	defer dcancel()
+	if err := src.DelFavorite(dctx, cred, comicID); err != nil {
 		writeErr(w, 400, "取消收藏失败: %v", err)
 		return
 	}
@@ -421,7 +464,9 @@ func (s *Server) comicDetail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "%v", err)
 		return
 	}
-	c, err := src.Detail(rctx(), cred, comicID)
+	dctx, dcancel := ctxTimeout(r, 3*time.Minute)
+	defer dcancel()
+	c, err := src.Detail(dctx, cred, comicID)
 	if err != nil {
 		writeErr(w, 400, "%v", err)
 		return
@@ -475,7 +520,9 @@ func (s *Server) comicCover(w http.ResponseWriter, r *http.Request) {
 	if accID := intQuery(r, "accountId", 0); accID > 0 {
 		acc, _ = s.st.GetAccount(int64(accID))
 	}
-	b, _, err := src.Cover(rctx(), s.bestCred(acc, kind), comicID)
+	cvctx, cvcancel := ctxTimeout(r, 3*time.Minute)
+	defer cvcancel()
+	b, _, err := src.Cover(cvctx, s.bestCred(acc, kind), comicID)
 	if err != nil {
 		writeErr(w, 404, "取封面失败: %v", err)
 		return
@@ -517,7 +564,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	page := intQuery(r, "page", 1)
 	size := intQuery(r, "pageSize", 20)
 	sortBy := r.URL.Query().Get("sort")
-	ctx, cancel := rctxTimeout(60 * time.Second)
+	ctx, cancel := ctxTimeout(r, 60*time.Second)
 	defer cancel()
 	res, err := src.Search(ctx, s.bestCred(acc, kind), kw, page, size, sortBy)
 	if err != nil {
@@ -574,8 +621,7 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
-	page := intQuery(r, "page", 1)
-	size := intQuery(r, "pageSize", 20)
+	page, size := pageParams(r, 20)
 	status := r.URL.Query().Get("status")
 	jobs, total, err := s.st.ListJobs(status, size, (page-1)*size)
 	if err != nil {
@@ -645,8 +691,7 @@ func (s *Server) jobLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) library(w http.ResponseWriter, r *http.Request) {
-	page := intQuery(r, "page", 1)
-	size := intQuery(r, "pageSize", 50)
+	page, size := pageParams(r, 50)
 	kind := r.URL.Query().Get("kind")
 	kw := r.URL.Query().Get("keyword")
 	sortBy := r.URL.Query().Get("sort")
@@ -803,5 +848,3 @@ func diskUsage(path string) (uint64, uint64) {
 	}
 	return st.Bavail * uint64(st.Bsize), st.Blocks * uint64(st.Bsize)
 }
-
-var _ = io.Discard

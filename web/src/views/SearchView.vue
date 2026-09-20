@@ -1,9 +1,11 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '@/api'
 import { useAppStore } from '@/store/app'
 import { useDownloadActions } from '@/composables/useDownloadActions'
+import { useLatestRequest } from '@/composables/useLatestRequest'
+import { useViewActive } from '@/composables/useViewActive'
 import ComicCard from '@/components/ComicCard.vue'
 import ComicDetailDialog from '@/components/ComicDetailDialog.vue'
 import PageBar from '@/components/PageBar.vue'
@@ -30,6 +32,7 @@ const {
   detailVisible,
   detailComic,
   busy,
+  isBusy,
   downloadWhole,
   openPicker,
   openDetail,
@@ -39,8 +42,12 @@ const {
 const kindAccounts = computed(() => store.accounts.filter((a) => a.kind === kind.value))
 const sortOptions = computed(() => SORT_OPTIONS[kind.value] || [])
 
+/** 搜索请求：只认最后一次（连点「搜索」/ 快速翻页不会被旧响应覆盖） */
+const req = useLatestRequest(30000)
+
 async function load() {
   page.value = page.value || 1
+  const { my, signal } = req.begin()
   loading.value = true
   try {
     const res = await api.search({
@@ -49,16 +56,22 @@ async function load() {
       page: page.value,
       pageSize: pageSize.value,
       accountId: accountId.value || undefined,
-      sort: sort.value || undefined
+      sort: sort.value || undefined,
+      signal
     })
+    if (!req.isCurrent(my)) return
     items.value = res?.items || []
     total.value = Number(res?.total) || 0
   } catch (e) {
+    if (e?.name === 'AbortError' || !req.isCurrent(my)) return
     items.value = []
     total.value = 0
   } finally {
-    loading.value = false
-    searched.value = true
+    req.end()
+    if (req.isCurrent(my)) {
+      loading.value = false
+      searched.value = true
+    }
   }
 }
 
@@ -102,9 +115,16 @@ watch(kind, () => {
   searched.value = false
 })
 
-onMounted(async () => {
-  await store.loadAccounts().catch(() => {})
-})
+/* keep-alive 缓存后 onMounted 只跑一次：切回搜索页补一次账号列表（store 内有缓存/去重） */
+const active = useViewActive({ onEnter: () => store.loadAccounts().catch(() => {}) })
+
+/** 顶栏「刷新」：已搜过就按当前条件重搜 */
+watch(
+  () => store.refreshTick,
+  () => {
+    if (active.value && searched.value) load()
+  }
+)
 
 const quickKeywords = ['同人', '短篇', '中文', '单行本']
 </script>
@@ -164,7 +184,13 @@ const quickKeywords = ['同人', '短篇', '中文', '单行本']
       >
         {{ k }}
       </el-tag>
-      <span v-if="!kindAccounts.length" class="ms-dim note">
+      <span v-if="store.accountsError && !store.accounts.length" class="note err-note">
+        账号列表加载失败
+        <el-button size="small" text type="primary" @click="store.loadAccounts(true).catch(() => {})">
+          重试
+        </el-button>
+      </span>
+      <span v-else-if="!kindAccounts.length" class="ms-dim note">
         （该源还没有账号，未选账号时部分源可能搜索失败）
       </span>
     </div>
@@ -185,7 +211,7 @@ const quickKeywords = ['同人', '短篇', '中文', '单行本']
         :key="`${item.kind}-${item.comicId}`"
         :item="item"
         show-collect
-        :busy="collectingId === String(item.comicId) || busy"
+        :busy="collectingId === String(item.comicId) || isBusy(item)"
         @download="onDownload"
         @queue="openPicker"
         @collect="onCollect"
@@ -239,6 +265,11 @@ const quickKeywords = ['同人', '短篇', '中文', '单行本']
 
 .note {
   font-size: 12px;
+}
+
+.err-note {
+  font-size: 12px;
+  color: var(--el-color-danger);
 }
 
 .foot-tip {

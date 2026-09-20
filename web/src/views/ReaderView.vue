@@ -134,6 +134,12 @@ const sizes = ref([])
 const natSize = reactive({})
 /** 正在后台预取的页，避免重复请求 */
 const preloading = reactive({})
+/**
+ * 章节世代：每次 load 递增。
+ * 切章后旧章节图片的回调（onload/onerror）一律作废 —— 慢链路下预载的旧图
+ * 否则会把新章节的状态写坏（占位骨架提前消失、比例用上一章的尺寸）。
+ */
+let gen = 0
 
 const fit = ref(localStorage.getItem('ms-reader-fit') || 'width')
 const dark = ref(localStorage.getItem('ms-reader-dark') === '1')
@@ -189,26 +195,32 @@ function readProgress() {
 }
 
 async function load() {
+  const my = ++gen
   loading.value = true
   loadError.value = ''
   Object.keys(failed).forEach((k) => delete failed[k])
   Object.keys(loaded).forEach((k) => delete loaded[k])
   Object.keys(preloading).forEach((k) => delete preloading[k])
+  // 上一章测出来的真实尺寸也要清：否则新章节的占位比例会沿用上一章的数字
+  Object.keys(natSize).forEach((k) => delete natSize[k])
   sizes.value = []
   try {
     // 本子信息（章节列表）：失败也不阻塞阅读
     if (!chapters.value.length) {
       try {
         const c = await api.comic(kind.value, comicId.value)
+        if (my !== gen) return // 已经切章，丢弃这次结果
         title.value = c.title || c.comicId
         chapters.value = (c.chapters || []).map((x) => ({ order: x.order, title: x.title }))
         if (!chapters.value.length) chapters.value = [{ order: 1, title: '' }]
       } catch (e) {
+        if (my !== gen) return
         title.value = comicId.value
         chapters.value = [{ order: 1, title: '' }]
       }
     }
     const m = await api.readerMeta(kind.value, comicId.value, order.value)
+    if (my !== gen) return // 快速连切章节时，旧响应不能覆盖新章节
     meta.pages = m.pages || 0
     meta.chapterTitle = m.chapterTitle || ''
     meta.local = !!m.local
@@ -216,9 +228,11 @@ async function load() {
     sizes.value = Array.isArray(m.sizes) ? m.sizes : []
     if (!meta.pages) loadError.value = m.error || '这一章拿不到图片'
   } catch (e) {
+    if (my !== gen) return
     loadError.value = e?.message || '加载失败'
   } finally {
-    loading.value = false
+    // 只有最后一次 load 有权关掉 loading（否则新请求还在跑，骨架屏就没了）
+    if (my === gen) loading.value = false
   }
 }
 
@@ -269,15 +283,19 @@ function updateCurrentPage() {
 
 /** 提前把后面几页塞进浏览器缓存（顺带记录真实尺寸，占位更准） */
 function preload(cur) {
+  const my = gen // 记住这批预载属于哪一章
   for (let i = cur + 1; i <= Math.min(cur + 3, meta.pages); i++) {
     if (loaded[i] || failed[i] || preloading[i]) continue
     preloading[i] = true
     const im = new Image()
     im.onload = () => {
+      if (my !== gen) return // 已经切章：旧图回调作废
       loaded[i] = true
+      preloading[i] = false // 成功也要复位，否则这张图再也不会被预载
       if (im.naturalWidth) natSize[i] = [im.naturalWidth, im.naturalHeight]
     }
     im.onerror = () => {
+      if (my !== gen) return
       preloading[i] = false
     }
     im.src = pageUrl(i)

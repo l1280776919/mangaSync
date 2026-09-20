@@ -92,6 +92,23 @@ export function durationBetween(startAt, endAt) {
   return formatDuration((e - s) / 1000)
 }
 
+/**
+ * 任务耗时（列表列 & 进度行共用，避免两份手写实现）。
+ * 口径：<1 分钟 → “N 秒”；<1 小时 → “N 分 M 秒”；否则 → “N 小时 M 分”。
+ * endAt 缺省表示仍在进行中（算到当前时刻）。
+ */
+export function formatElapsed(startAt, endAt) {
+  if (!startAt) return '—'
+  const s = new Date(startAt).getTime()
+  const e = endAt ? new Date(endAt).getTime() : Date.now()
+  if (!Number.isFinite(s) || !Number.isFinite(e)) return '—'
+  const sec = Math.max(0, Math.floor((e - s) / 1000))
+  if (sec < 60) return `${sec} 秒`
+  const m = Math.floor(sec / 60)
+  if (m < 60) return `${m} 分 ${sec % 60} 秒`
+  return `${Math.floor(m / 60)} 小时 ${m % 60} 分`
+}
+
 /** RFC3339 → 本地显示 */
 export function formatTime(value, withSeconds = false) {
   if (!value) return '—'

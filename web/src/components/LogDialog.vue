@@ -20,6 +20,7 @@ const error = ref('')
 const autoRefresh = ref(true)
 const showAll = ref(false)
 let timer = null
+let fetching = false
 
 const visible = computed({
   get: () => props.modelValue,
@@ -28,8 +29,14 @@ const visible = computed({
 
 const shown = computed(() => (showAll.value ? logs.value : logs.value.slice(-200)))
 
+/** 任务已到终态：日志不会再变，不必再轮询 */
+const isRunning = computed(
+  () => props.job?.status === 'running' || props.job?.status === 'queued'
+)
+
 async function load(silent = false) {
-  if (!props.job?.id) return
+  if (!props.job?.id || fetching) return // 上一轮还没回来就跳过，避免堆请求
+  fetching = true
   if (!silent) loading.value = true
   error.value = ''
   try {
@@ -38,12 +45,15 @@ async function load(silent = false) {
   } catch (e) {
     error.value = e.message || '加载日志失败'
   } finally {
+    fetching = false
     loading.value = false
   }
 }
 
 function startTimer() {
   stopTimer()
+  // 只有还在跑的任务才值得每 3 秒拉一次日志
+  if (!isRunning.value) return
   timer = setInterval(() => {
     if (autoRefresh.value) load(true)
   }, 3000)
@@ -57,8 +67,8 @@ function stopTimer() {
 }
 
 watch(
-  () => props.modelValue,
-  (open) => {
+  [() => props.modelValue, () => props.job?.id],
+  ([open]) => {
     if (open) {
       logs.value = []
       load()
@@ -69,6 +79,15 @@ watch(
   },
   { immediate: true }
 )
+
+// 任务在弹窗打开期间跑完 → 停掉轮询
+watch(isRunning, (running) => {
+  if (running) {
+    if (props.modelValue) startTimer()
+  } else {
+    stopTimer()
+  }
+})
 
 onUnmounted(stopTimer)
 

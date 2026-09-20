@@ -1,6 +1,14 @@
 import { defineStore } from 'pinia'
 import api from '@/api'
 
+/** /api/stats 的复用窗口：切页太频繁时不必每次都打一次（顶栏刷新会强制拉） */
+const STATS_TTL = 15000
+
+/* 进行中的请求：放模块作用域，不把 Promise 塞进 pinia 变成响应式数据 */
+let accountsInflight = null
+let statsInflight = null
+let statsAt = 0
+
 /**
  * 全局状态：账号列表、设置、统计、以及 SSE 实时任务流。
  *
@@ -12,10 +20,12 @@ export const useAppStore = defineStore('app', {
   state: () => ({
     accounts: [],
     accountsLoaded: false,
+    accountsError: '',   // 账号列表最近一次加载失败的原因（空串表示正常）
     settings: null,
     stats: null,
     jobs: {},            // id -> 任务对象
     jobTick: 0,          // 每收到一次任务事件 +1，供视图 watch
+    refreshTick: 0,      // 顶栏「刷新」+1，当前视图 watch 它重新加载自己的数据
     sseStatus: 'idle',   // idle | connecting | online | offline
     sseRetries: 0,
     polling: false,
@@ -43,26 +53,52 @@ export const useAppStore = defineStore('app', {
 
     async loadAccounts(force = false) {
       if (this.accountsLoaded && !force) return this.accounts
-      try {
-        const data = await api.listAccounts()
-        this.accounts = Array.isArray(data) ? data : (data?.items ?? [])
-        this.accountsLoaded = true
-      } catch (e) {
-        this.accountsLoaded = true
-        throw e
-      }
-      return this.accounts
+      // 并发调用（App 启动 + 视图 onActivated）只发一次请求
+      if (accountsInflight) return accountsInflight
+      accountsInflight = api
+        .listAccounts()
+        .then((data) => {
+          this.accounts = Array.isArray(data) ? data : (data?.items ?? [])
+          this.accountsLoaded = true
+          this.accountsError = ''
+          return this.accounts
+        })
+        .catch((e) => {
+          // 加载失败**不**置 accountsLoaded：否则一次抖动后列表永久为空，
+          // 用户只看到「该源还没有账号」，不知道其实是没加载成功
+          this.accountsLoaded = false
+          this.accountsError = e?.message || '账号列表加载失败'
+          throw e
+        })
+        .finally(() => {
+          accountsInflight = null
+        })
+      return accountsInflight
     },
 
-    async loadSettings(force = false) {
-      if (this.settings && !force) return this.settings
-      this.settings = await api.getSettings()
-      return this.settings
+    /**
+     * 统计信息。maxAge 内的结果直接复用（避免每次路由跳转都重拉一份 stats），
+     * 传 0 表示强制拉取。
+     */
+    async loadStats(maxAge = STATS_TTL) {
+      if (this.stats && Date.now() - statsAt < maxAge) return this.stats
+      if (statsInflight) return statsInflight
+      statsInflight = api
+        .stats()
+        .then((s) => {
+          this.stats = s
+          statsAt = Date.now()
+          return s
+        })
+        .finally(() => {
+          statsInflight = null
+        })
+      return statsInflight
     },
 
-    async loadStats() {
-      this.stats = await api.stats()
-      return this.stats
+    /** 顶栏「刷新」：广播给当前视图，由各视图重新加载自己的数据 */
+    triggerRefresh() {
+      this.refreshTick++
     },
 
     /* ---------------- 任务 & SSE ---------------- */
@@ -79,9 +115,12 @@ export const useAppStore = defineStore('app', {
 
     /** 加载进行中的任务（首屏/降级轮询用） */
     async loadActiveJobs() {
-      const res = await api.listDownloads({ status: 'running', pageSize: 200 })
-      this.mergeJobs(res?.items || [])
-      const queued = await api.listDownloads({ status: 'queued', pageSize: 200 })
+      // 两次请求并发（原来串行，降级轮询时白等一个 RTT）
+      const [running, queued] = await Promise.all([
+        api.listDownloads({ status: 'running', pageSize: 200 }),
+        api.listDownloads({ status: 'queued', pageSize: 200 })
+      ])
+      this.mergeJobs(running?.items || [])
       this.mergeJobs(queued?.items || [])
     },
 

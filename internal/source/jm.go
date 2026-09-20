@@ -350,7 +350,10 @@ func (it jmListItem) toComic() *Comic {
 func (j *JM) Favorites(ctx context.Context, cred *Cred) ([]*Comic, error) {
 	var out []*Comic
 	seen := map[string]bool{}
-	for page := 1; page <= 30; page++ {
+	// maxPages 只是防跑飞的兜底；正常终止条件跟随服务端返回的 total。
+	// 原来固定 30 页：收藏超过 30 页的账号会被静默截断（同步显示「成功」却长期缺书）。
+	const maxPages = 200
+	for page := 1; page <= maxPages; page++ {
 		var res struct {
 			List  []jmListItem `json:"list"`
 			Total flexInt      `json:"total"`
@@ -361,7 +364,9 @@ func (j *JM) Favorites(ctx context.Context, cred *Cred) ([]*Comic, error) {
 			if page == 1 {
 				return nil, err
 			}
-			break
+			// 中途出错：返回已取到的部分 + err，调用方据此提示「部分同步」，
+			// 而不是把部分结果当成功（原来直接 break，错误被吞掉）
+			return out, fmt.Errorf("收藏第 %d 页拉取失败（已取到 %d 本）: %w", page, len(out), err)
 		}
 		for _, it := range res.List {
 			id := it.ID.String()
@@ -371,7 +376,10 @@ func (j *JM) Favorites(ctx context.Context, cred *Cred) ([]*Comic, error) {
 			seen[id] = true
 			out = append(out, it.toComic())
 		}
-		if len(res.List) == 0 || len(out) >= res.Total.Int() {
+		if len(res.List) == 0 {
+			break
+		}
+		if total := res.Total.Int(); total > 0 && len(out) >= total {
 			break
 		}
 	}

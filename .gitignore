@@ -1,6 +1,7 @@
 # 构建产物
 /mangasync
 !web/dist
+mangasync.bak-*
 # 依赖与缓存
 web/node_modules/
 engines/__pycache__/
@@ -9,3 +10,10 @@ __pycache__/
 # 本地运行数据
 *.log
 .DS_Store
+# 本地数据与临时备份（数据库/账号数据都在 /vol1/@appdata，别入库）
+*.db
+*.db-wal
+*.db-shm
+*.bak
+*.bak-*
+cache/

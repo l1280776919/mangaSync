@@ -1,23 +1,28 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api'
+import { useAppStore } from '@/store/app'
 import { useIsMobile } from '@/composables/useIsMobile'
+import { useLatestRequest } from '@/composables/useLatestRequest'
+import { useViewActive } from '@/composables/useViewActive'
 import CoverImage from '@/components/CoverImage.vue'
 import KindTag from '@/components/KindTag.vue'
 import PageBar from '@/components/PageBar.vue'
 import StatCard from '@/components/StatCard.vue'
 import { KIND_OPTIONS, formatBytes, formatTime, fromNow } from '@/utils/format'
+import { readerPath } from '@/utils/reader'
 
 /* 手机端：宽表格换成 2 列封面卡片网格 */
 const isMobile = useIsMobile()
 const router = useRouter()
+const store = useAppStore()
 
 /** 打开在线阅读器（已下载的章节本地直发，未下载的回源并还原乱序） */
 function openReader(row, order = 1) {
-  if (!row?.kind || !row?.comicId) return
-  router.push(`/reader/${row.kind}/${encodeURIComponent(row.comicId)}/${order}`)
+  const path = readerPath(row, order)
+  if (path) router.push(path)
 }
 
 const kind = ref('')
@@ -38,7 +43,11 @@ const sortOptions = [
   { value: 'size', label: '按大小' }
 ]
 
+/** 列表请求：只认最后一次（快速搜索 / 翻页不会被旧响应覆盖），并带超时 */
+const req = useLatestRequest()
+
 async function load() {
+  const { my, signal } = req.begin()
   loading.value = true
   try {
     const res = await api.library({
@@ -46,16 +55,20 @@ async function load() {
       keyword: keyword.value.trim() || undefined,
       page: page.value,
       pageSize: pageSize.value,
-      sort: sort.value || undefined
+      sort: sort.value || undefined,
+      signal
     })
+    if (!req.isCurrent(my)) return
     items.value = res?.items || []
     total.value = Number(res?.total) || 0
     if (res?.stats) stats.value = res.stats
   } catch (e) {
+    if (e?.name === 'AbortError' || !req.isCurrent(my)) return
     items.value = []
     total.value = 0
   } finally {
-    loading.value = false
+    req.end()
+    if (req.isCurrent(my)) loading.value = false
   }
 }
 
@@ -128,7 +141,16 @@ async function rescan() {
 
 const sizeText = computed(() => formatBytes(stats.value?.bytes))
 
-onMounted(load)
+/* keep-alive 缓存后 onMounted 只跑一次：切回漫画库要重新拉（刚下完的漫画要出现） */
+const active = useViewActive({ onEnter: load })
+
+/** 顶栏「刷新」 */
+watch(
+  () => store.refreshTick,
+  () => {
+    if (active.value) load()
+  }
+)
 </script>
 
 <template>

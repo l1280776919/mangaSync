@@ -1,9 +1,10 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api'
 import { useAppStore } from '@/store/app'
 import { useIsMobile } from '@/composables/useIsMobile'
+import { useViewActive } from '@/composables/useViewActive'
 import KindTag from '@/components/KindTag.vue'
 import StatusTag from '@/components/StatusTag.vue'
 import { KIND_OPTIONS, formatTime, fromNow } from '@/utils/format'
@@ -50,10 +51,8 @@ const kindOptions = KIND_OPTIONS
 async function load() {
   loading.value = true
   try {
-    const data = await api.listAccounts()
-    rows.value = Array.isArray(data) ? data : (data?.items ?? [])
-    store.accounts = rows.value
-    store.accountsLoaded = true
+    // 走 store：失败时不再把 accountsLoaded 置位（一次抖动后列表不会永久为空）
+    rows.value = await store.loadAccounts(true)
   } catch (e) {
     rows.value = []
   } finally {
@@ -170,7 +169,16 @@ function statusOf(row) {
   return row.status || 'error'
 }
 
-onMounted(load)
+/* keep-alive 缓存后 onMounted 只跑一次：切回账号页重新拉（外部改过账号也能看到） */
+const active = useViewActive({ onEnter: load })
+
+/** 顶栏「刷新」 */
+watch(
+  () => store.refreshTick,
+  () => {
+    if (active.value) load()
+  }
+)
 </script>
 
 <template>
@@ -185,6 +193,17 @@ onMounted(load)
         <el-button size="small" type="primary" @click="openCreate">新增账号</el-button>
       </div>
     </div>
+
+    <el-alert
+      v-if="store.accountsError && !rows.length && !loading"
+      type="error"
+      :closable="false"
+      show-icon
+      :title="`账号列表加载失败：${store.accountsError}`"
+      class="mb10"
+    >
+      <el-button size="small" text type="primary" @click="load">重试</el-button>
+    </el-alert>
 
     <!-- 宽屏：表格 -->
     <el-table
@@ -383,6 +402,10 @@ onMounted(load)
 </template>
 
 <style scoped>
+.mb10 {
+  margin-bottom: 10px;
+}
+
 .head-actions {
   display: flex;
   gap: 8px;

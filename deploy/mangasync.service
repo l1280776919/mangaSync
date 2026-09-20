@@ -1,17 +1,25 @@
-# 通用模板：按需改 WorkingDirectory / 数据目录
+# ⚠️ 本机实际使用的 unit 是 /etc/systemd/system/mangasync.service（同内容）。
+#    文件名与生产 unit 相同，**不要直接 `cp deploy/mangasync.service /etc/systemd/system/`**
+#    除非你确认这里的路径与该机器一致（曾经照抄会指向 /opt/mangasync 导致服务起不来）。
 [Unit]
 Description=mangaSync 漫画收藏同步系统
 After=network-online.target
 Wants=network-online.target
+# 崩溃循环也不放弃重启
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/mangasync
-Environment=MANGASYNC_HOME=/var/lib/mangasync
-ExecStart=/opt/mangasync/mangasync -addr :8787
-Restart=on-failure
-RestartSec=5
+WorkingDirectory=/root/mangaSync
+Environment=MANGASYNC_HOME=/vol1/@appdata/mangasync
 Environment=HOME=/root
+ExecStart=/root/mangaSync/mangasync -addr :8787
+Restart=always
+RestartSec=5
+# 资源上限：8G 内存的 NAS 上不要把其它应用拖垮
+MemoryHigh=1500M
+MemoryMax=2G
+CPUQuota=200%
 
 [Install]
 WantedBy=multi-user.target

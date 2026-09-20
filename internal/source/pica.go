@@ -730,7 +730,7 @@ func (p *Pica) Download(ctx context.Context, cred *Cred, comicID string, orders 
 			continue
 		}
 
-		tmp := filepath.Join(cdir, "."+cname+".part")
+		tmp := filepath.Join(cdir, tmpDirName(cname, h.JobID))
 		os.RemoveAll(tmp)
 		if err := os.MkdirAll(tmp, 0o755); err != nil {
 			return res, err
@@ -818,7 +818,10 @@ func (p *Pica) downloadImages(ctx context.Context, urls []string, dir string, h 
 	}
 	// 进度上报协程
 	stop := make(chan struct{})
+	var tickWg sync.WaitGroup
+	tickWg.Add(1)
 	go func() {
+		defer tickWg.Done()
 		t := time.NewTicker(700 * time.Millisecond)
 		defer t.Stop()
 		for {
@@ -841,12 +844,28 @@ func (p *Pica) downloadImages(ctx context.Context, urls []string, dir string, h 
 			}
 		}
 	}()
+	// stopTicker 必须在返回前等到 ticker 协程真正退出：
+	// 否则它可能正在执行 h.prog(cur)，与调用方稍后的进度回调并发写同一份状态（数据竞争）
+	stopTicker := func() {
+		close(stop)
+		tickWg.Wait()
+	}
 	for i, u := range urls {
-		jobs <- job{idx: i + 1, url: u}
+		select {
+		case jobs <- job{idx: i + 1, url: u}:
+		case <-ctx.Done():
+			// ctx 取消后 worker 会直接 return，此时裸阻塞发送会永久 hang 住（并发槽被占死）
+			close(jobs)
+			wg.Wait()
+			stopTicker()
+			mu.Lock()
+			defer mu.Unlock()
+			return imagesDone, bytesDone, ctx.Err()
+		}
 	}
 	close(jobs)
 	wg.Wait()
-	close(stop)
+	stopTicker()
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -942,6 +961,18 @@ func chapterDirName(ch Chapter) string {
 		title = fmt.Sprintf("第%d话", ch.Order)
 	}
 	return fmt.Sprintf("%03d - %s", ch.Order, sanitize(title, 70))
+}
+
+// tmpDirName 下载中的临时目录名：带上任务号做隔离。
+// 原来固定是 ".<章节名>.part"，同一本漫画被两个任务并发下载时会互相 RemoveAll，
+// 正是历史上 open .../015.jpg.part: no such file or directory 的成因。
+// 拿不到任务号（JobID=0）时用 pid+纳秒兜底。
+func tmpDirName(cname string, jobID int64) string {
+	tag := strconv.FormatInt(jobID, 10)
+	if jobID == 0 {
+		tag = fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+	}
+	return "." + cname + "." + tag + ".part"
 }
 
 var imgExts = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true}

@@ -37,8 +37,14 @@ const (
 	DefaultAdminPassword = "admin999"
 )
 
+// maxBufferSize /api/ 响应缓冲上限：超过就改为直通流式输出。
+// 原来所有 /api/ 响应都会整份缓冲（阅读器整页图片就是前后各留一份内存，且还会白跑一次 gzip 判断），
+// 弱网下最该定长的其实是小的 JSON；大响应直通反而更省内存。
+const maxBufferSize = 256 << 10
+
 // gzipMiddleware 只处理 /api/：把响应缓冲后一次性写出并带上 Content-Length，
 // 避免 chunked 在弱网/穿透链路被截断（浏览器对不定长响应截断是直接报错不重试的）。
+// 超过 maxBufferSize 的大响应不缓冲、直接流式透传（保留 handler 自己设的 Content-Length）。
 // 静态资源由 staticAssets 预压缩处理，SSE 保持流式不压缩。
 func gzipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -47,8 +53,15 @@ func gzipMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		buf := &bufferedWriter{header: http.Header{}, status: http.StatusOK}
+		buf := &bufferedWriter{header: http.Header{}, status: http.StatusOK, dst: w}
+		if f, ok := w.(http.Flusher); ok {
+			buf.flusher = f
+		}
 		next.ServeHTTP(buf, r)
+		if buf.over {
+			// 已直通写出，不能再动 header / 长度
+			return
+		}
 
 		body := buf.body.Bytes()
 		h := w.Header()
@@ -72,20 +85,57 @@ func gzipMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// bufferedWriter 先把响应攒在内存里，便于计算 Content-Length
+// bufferedWriter 先把响应攒在内存里，便于计算 Content-Length；
+// 超过上限后切换成直通模式（over=true），后续字节直接写给客户端。
 type bufferedWriter struct {
-	header http.Header
-	body   bytes.Buffer
-	status int
+	header  http.Header
+	body    bytes.Buffer
+	status  int
+	dst     http.ResponseWriter
+	flusher http.Flusher
+	over    bool // 已切换到直通模式
 }
 
 func (b *bufferedWriter) Header() http.Header { return b.header }
 
-func (b *bufferedWriter) WriteHeader(code int) { b.status = code }
+func (b *bufferedWriter) WriteHeader(code int) {
+	if !b.over {
+		b.status = code
+	}
+}
 
-func (b *bufferedWriter) Write(p []byte) (int, error) { return b.body.Write(p) }
+func (b *bufferedWriter) Write(p []byte) (int, error) {
+	if !b.over && b.body.Len()+len(p) > maxBufferSize {
+		b.startStreaming()
+	}
+	if b.over {
+		return b.dst.Write(p)
+	}
+	return b.body.Write(p)
+}
 
-func (b *bufferedWriter) Flush() {}
+// startStreaming 把已缓冲的内容连同 header 一次性交出，之后不再缓冲
+func (b *bufferedWriter) startStreaming() {
+	b.over = true
+	h := b.dst.Header()
+	for k, vs := range b.header {
+		for _, v := range vs {
+			h.Add(k, v)
+		}
+	}
+	b.dst.WriteHeader(b.status)
+	if b.body.Len() > 0 {
+		_, _ = b.dst.Write(b.body.Bytes())
+		b.body.Reset()
+	}
+}
+
+// Flush 直通模式下真正下刷；缓冲模式下不刷（缓冲是刻意为之，中途刷会丢掉 Content-Length）
+func (b *bufferedWriter) Flush() {
+	if b.over && b.flusher != nil {
+		b.flusher.Flush()
+	}
+}
 
 func compressibleType(ct string) bool {
 	ct = strings.ToLower(ct)
@@ -135,6 +185,11 @@ func main() {
 		log.Printf("首次初始化：已创建管理员 %s / %s（首次登录必须修改密码）", DefaultAdminUser, DefaultAdminPassword)
 	}
 	_ = st.CleanupSessions()
+	// 上次进程退出时正在跑的任务，其执行协程已随进程消失（dispatch 只捞 queued）：
+	// 放回队列，否则会永久卡在 running，既不重试也不失败
+	if n, rerr := st.ResetRunningJobs(); rerr == nil && n > 0 {
+		log.Printf("重启恢复：%d 个中断的下载任务已重新入队", n)
+	}
 	eng := engine.New(st, cfg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -157,6 +212,12 @@ func main() {
 	go scheduler(ctx, cfg, eng)
 
 	srv := api.NewServer(st, cfg, eng)
+	// 阅读器回源缓存按访问时间清理 7 天前的页图（纯派生数据，删掉最多多一次回源）
+	go func() {
+		if n, freed := srv.CleanReaderCache(7 * 24 * time.Hour); n > 0 {
+			log.Printf("阅读器缓存清理：删除 %d 个过期文件，释放 %.1f MB", n, float64(freed)/1024/1024)
+		}
+	}()
 	mux := http.NewServeMux()
 	assets := newStaticAssets()
 	mux.Handle("/api/", srv.Routes())
@@ -339,11 +400,48 @@ func logRequests(next http.Handler) http.Handler {
 	})
 }
 
-// scheduler 每天在设定时间跑一次全量收藏同步
+// scheduleStatePath 定时同步「今天跑过没有」的持久化位置（放在数据目录里，跟 config.json 同级）
+func scheduleStatePath(cfg *config.Manager) string {
+	return filepath.Join(cfg.Dir(), "schedule.state")
+}
+
+// loadLastRun 读上次跑成功的日期（"2006-01-02"），读不到返回 ""
+func loadLastRun(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	s := strings.TrimSpace(string(b))
+	if _, perr := time.Parse("2006-01-02", s); perr != nil {
+		return ""
+	}
+	return s
+}
+
+// saveLastRun 原子写（临时文件 + rename），失败只记日志
+func saveLastRun(path, day string) {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(day+"\n"), 0o600); err != nil {
+		log.Printf("记录定时同步状态失败: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		log.Printf("记录定时同步状态失败: %v", err)
+	}
+}
+
+// scheduler 每天在设定时间跑一次全量收藏同步。
+// lastRun 不再只是内存变量：进程重启（升级/宕机）后从文件恢复，
+// 并且只要「今天还没跑过」且已过设定时刻，就补跑一次 —— 否则每天 04:30 前后刚好重启
+// 就会整天不同步。
 func scheduler(ctx context.Context, cfg *config.Manager, eng *engine.Engine) {
+	statePath := scheduleStatePath(cfg)
+	lastRun := loadLastRun(statePath)
+	if lastRun != "" {
+		log.Printf("定时同步状态：上次同步日 %s", lastRun)
+	}
 	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()
-	lastRun := ""
 	for {
 		select {
 		case <-ctx.Done():
@@ -356,11 +454,14 @@ func scheduler(ctx context.Context, cfg *config.Manager, eng *engine.Engine) {
 			now := time.Now()
 			hhmm := now.Format("15:04")
 			today := now.Format("2006-01-02")
-			if hhmm != s.Schedule.Time || lastRun == today {
+			// 字符串比较即可（都是零填充的 HH:MM）；
+			// hhmm >= 设定时刻 覆盖了「已经过了点但今天没跑」的补跑场景
+			if hhmm < s.Schedule.Time || lastRun == today {
 				continue
 			}
 			lastRun = today
-			log.Printf("定时同步开始（%s）", s.Schedule.Time)
+			saveLastRun(statePath, today)
+			log.Printf("定时同步开始（设定 %s，当前 %s）", s.Schedule.Time, hhmm)
 			go func() {
 				c := ctx
 				enq, skip, err := eng.SyncAll(c)

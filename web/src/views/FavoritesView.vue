@@ -1,17 +1,20 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api'
 import { useAppStore } from '@/store/app'
 import { useDownloadActions } from '@/composables/useDownloadActions'
 import { useIsMobile } from '@/composables/useIsMobile'
+import { useLatestRequest } from '@/composables/useLatestRequest'
+import { useViewActive } from '@/composables/useViewActive'
 import ComicCard from '@/components/ComicCard.vue'
 import CoverImage from '@/components/CoverImage.vue'
 import ComicDetailDialog from '@/components/ComicDetailDialog.vue'
 import KindTag from '@/components/KindTag.vue'
 import PageBar from '@/components/PageBar.vue'
 import { downloadStateOf, formatBytes, formatTime } from '@/utils/format'
+import { readerPath } from '@/utils/reader'
 
 const store = useAppStore()
 /* 手机端：只保留卡片视图 + 底部批量操作栏 */
@@ -20,8 +23,9 @@ const router = useRouter()
 
 /** 在线阅读：已下载章节走本地文件秒开，未下载的回源并在服务端还原乱序 */
 function read(row, order = 1) {
-  if (!row?.comicId) return
-  router.push(`/reader/${row.kind || kind.value}/${encodeURIComponent(row.comicId)}/${order}`)
+  // 行数据缺 kind 时回退到当前账号的源（原来写成未定义的 kind.value，会抛 ReferenceError）
+  const path = readerPath(row, order, currentAccount.value?.kind)
+  if (path) router.push(path)
 }
 
 const accountId = ref(null)
@@ -44,6 +48,7 @@ const {
   detailVisible,
   detailComic,
   busy,
+  isBusy,
   downloadWhole,
   downloadMany,
   openPicker,
@@ -51,33 +56,46 @@ const {
   submitPicker
 } = useDownloadActions(() => accountId.value)
 
+/** 列表请求：只认最后一次（切账号 / 翻页 / 连点搜索不会被旧响应覆盖） */
+const req = useLatestRequest()
+
 async function load() {
   if (!accountId.value) {
     items.value = []
     total.value = 0
     return
   }
+  const { my, signal } = req.begin()
   loading.value = true
   try {
     const res = await api.favorites(accountId.value, {
       keyword: keyword.value.trim() || undefined,
       page: page.value,
-      pageSize: pageSize.value
+      pageSize: pageSize.value,
+      signal
     })
+    if (!req.isCurrent(my)) return
     items.value = res?.items || []
     total.value = Number(res?.total) || 0
     selected.value = []
   } catch (e) {
+    if (e?.name === 'AbortError' || !req.isCurrent(my)) return
     items.value = []
     total.value = 0
   } finally {
-    loading.value = false
+    req.end()
+    if (req.isCurrent(my)) loading.value = false
   }
 }
 
+/**
+ * 刷账号列表并保证「首次进入只发一次 /favorites」：
+ * 赋值 accountId 会触发下面的 watch（唯一入口），未变更时才手动 load 一次。
+ */
 async function refreshAccounts() {
   await store.loadAccounts(true).catch(() => {})
-  if (!accountId.value && accounts.value.length) accountId.value = accounts.value[0].id
+  if (accountId.value == null && accounts.value.length) accountId.value = accounts.value[0].id
+  else if (accountId.value != null) load()
 }
 
 function search() {
@@ -152,10 +170,16 @@ watch(accountId, () => {
   load()
 })
 
-onMounted(async () => {
-  await refreshAccounts()
-  if (accountId.value) load()
-})
+/* keep-alive 缓存后 onMounted 只跑一次：切回收藏页重新拉账号与列表 */
+const active = useViewActive({ onEnter: refreshAccounts })
+
+/** 顶栏「刷新」 */
+watch(
+  () => store.refreshTick,
+  () => {
+    if (active.value) refreshAccounts()
+  }
+)
 </script>
 
 <template>
@@ -224,12 +248,26 @@ onMounted(async () => {
 
     <el-alert
       v-if="!accounts.length"
-      type="warning"
+      :type="store.accountsError ? 'error' : 'warning'"
       :closable="false"
       show-icon
-      title="还没有可用账号，请先到「账号」页添加。"
+      :title="
+        store.accountsError
+          ? `账号列表加载失败：${store.accountsError}`
+          : '还没有可用账号，请先到「账号」页添加。'
+      "
       class="mb10"
-    />
+    >
+      <el-button
+        v-if="store.accountsError"
+        size="small"
+        text
+        type="primary"
+        @click="refreshAccounts"
+      >
+        重试
+      </el-button>
+    </el-alert>
     <el-alert
       v-else-if="!loading && !items.length"
       type="info"
@@ -249,7 +287,7 @@ onMounted(async () => {
         readable
         :selected="selected.includes(String(item.comicId))"
         favorited
-        :busy="removingId === String(item.comicId) || busy"
+        :busy="removingId === String(item.comicId) || isBusy(item)"
         @toggle="toggleSelect"
         @read="read"
         @download="download"
@@ -334,7 +372,7 @@ onMounted(async () => {
       <el-table-column label="操作" width="280" fixed="right">
         <template #default="{ row }">
           <el-button size="small" type="success" plain @click="read(row)">阅读</el-button>
-          <el-button size="small" type="primary" :loading="busy" @click="download(row)">下载</el-button>
+          <el-button size="small" type="primary" :loading="isBusy(row)" @click="download(row)">下载</el-button>
           <el-button size="small" @click="openPicker(row)">加入队列</el-button>
           <el-button size="small" type="danger" plain :loading="removingId === String(row.comicId)" @click="removeFavorite(row)">
             取消收藏

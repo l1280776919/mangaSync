@@ -4,6 +4,7 @@ import KindTag from '@/components/KindTag.vue'
 import StatusTag from '@/components/StatusTag.vue'
 import {
   formatBytes,
+  formatElapsed,
   formatSpeed,
   formatTime,
   fromNow,
@@ -15,7 +16,9 @@ import {
  */
 const props = defineProps({
   job: { type: Object, required: true },
-  compact: { type: Boolean, default: false }
+  compact: { type: Boolean, default: false },
+  /** 是否显示「删除记录」（概览页只看进行中的任务，没有删除入口） */
+  removable: { type: Boolean, default: true }
 })
 
 defineEmits(['cancel', 'retry', 'remove', 'logs'])
@@ -40,16 +43,8 @@ const barStatus = computed(() => {
 
 const elapsed = computed(() => {
   const j = props.job
-  if (!j.startedAt) return '—'
-  const s = new Date(j.startedAt).getTime()
-  const e = j.finishedAt ? new Date(j.finishedAt).getTime() : Date.now()
-  if (!Number.isFinite(s) || !Number.isFinite(e)) return '—'
-  const sec = Math.max(0, Math.floor((e - s) / 1000))
-  if (sec < 60) return `${sec} 秒`
-  const m = Math.floor(sec / 60)
-  const r = sec % 60
-  if (m < 60) return `${m} 分 ${r} 秒`
-  return `${Math.floor(m / 60)} 小时 ${m % 60} 分`
+  // 与任务页表格共用同一份耗时格式化（原来两处各写了一遍）
+  return formatElapsed(j.startedAt, j.finishedAt)
 })
 
 const active = computed(() => props.job.status === 'queued' || props.job.status === 'running')
@@ -109,7 +104,15 @@ const active = computed(() => props.job.status === 'queued' || props.job.status 
         重试
       </el-button>
       <el-button size="small" @click="$emit('logs', job)">日志</el-button>
-      <el-button size="small" type="danger" plain @click="$emit('remove', job)">删除记录</el-button>
+      <el-button
+        v-if="removable"
+        size="small"
+        type="danger"
+        plain
+        @click="$emit('remove', job)"
+      >
+        删除记录
+      </el-button>
     </div>
   </div>
 </template>

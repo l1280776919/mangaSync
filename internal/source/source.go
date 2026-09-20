@@ -99,6 +99,9 @@ type ChapterState struct {
 }
 
 type Hooks struct {
+	// JobID 当前任务号（可为 0）：源用它给临时目录/文件加后缀，避免同一本漫画
+	// 被并发下载时不同任务的中间产物互相覆盖。
+	JobID    int64
 	Progress func(Progress)
 	Chapter  func(ChapterState)
 	Log      func(level, msg string)

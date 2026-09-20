@@ -1,6 +1,6 @@
 import { ElMessage } from 'element-plus'
 import api from '@/api'
-import router from '@/router'
+import router, { resetMeCache } from '@/router'
 import { clearSession, setMustChangePassword } from '@/store/auth'
 
 /**
@@ -13,6 +13,8 @@ export async function logout({ silent = false } = {}) {
   } catch (_) {
     /* 未登录 / 网络异常都按已登出处理 */
   }
+  // 清掉 me 的 TTL 缓存，否则重新登录前的 60s 内可能拿旧结果放行
+  resetMeCache()
   clearSession()
   if (router.currentRoute.value.path !== '/login') {
     await router.replace('/login')

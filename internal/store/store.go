@@ -76,7 +76,10 @@ func Open(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dir, "mangasync.db")+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	dbPath := filepath.Join(dir, "mangasync.db")
+	// wal_autocheckpoint(200)：WAL 累积到约 200 页就自动 checkpoint，避免 -wal 无限增长
+	db, err := sql.Open("sqlite", dbPath+
+		"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=wal_autocheckpoint(200)")
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +88,45 @@ func Open(dir string) (*Store, error) {
 	if err := s.migrate(); err != nil {
 		return nil, err
 	}
+	// 库里存着漫画站明文密码与 30 天会话 token，必须比 config.json 更严：0600
+	chmodPrivate(dbPath)
 	return s, nil
+}
+
+// chmodPrivate 把 SQLite 数据文件及其 WAL/SHM 兄弟文件收紧到 0600（不存在就跳过）
+func chmodPrivate(dbPath string) {
+	for _, p := range []string{dbPath, dbPath + "-wal", dbPath + "-shm", dbPath + "-journal"} {
+		if _, err := os.Stat(p); err == nil {
+			_ = os.Chmod(p, 0o600)
+		}
+	}
+}
+
+// ResetRunningJobs 进程重启后把上次残留的 running 任务放回队列。
+// 这些任务的执行 goroutine 已随进程消失，若不重置会永久卡在 running
+// （dispatch 只捞 queued），既不会重试也不会失败。
+func (s *Store) ResetRunningJobs() (int64, error) {
+	res, err := s.db.Exec(`update jobs set status='queued',error='',started_at='',speed_bps=0 where status='running'`)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// ActiveJobID 找同 kind+comic_id 已在排队/运行的任务（0 表示没有）。
+// 用于入队去重：同一本漫画并发跑两个任务会互踩临时目录、白占并发槽。
+func (s *Store) ActiveJobID(kind, comicID string) (int64, error) {
+	var id int64
+	err := s.db.QueryRow(`select id from jobs where kind=? and comic_id=? and status in ('queued','running')
+		order by id asc limit 1`, kind, comicID).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 func (s *Store) migrate() error {
@@ -305,6 +346,15 @@ func (s *Store) UpdateJobProgress(id int64, status, currentChapter string, chTot
 	_, err := s.db.Exec(`update jobs set status=?,current_chapter=?,chapters_total=?,chapters_done=?,
 		images_total=?,images_done=?,bytes=?,speed_bps=? where id=?`,
 		status, currentChapter, chTotal, chDone, imgTotal, imgDone, bytes, speed, id)
+	return err
+}
+
+// FinishJobProgress 写最终进度并把任务置为终态（一次写库，避免先 UpdateJobProgress
+// 再 SetJobStatus 对同一行写两遍）。status 传 done；speed_bps 归零。
+func (s *Store) FinishJobProgress(id int64, currentChapter string, chTotal, chDone, imgTotal, imgDone int, bytes int64) error {
+	_, err := s.db.Exec(`update jobs set status='done',error='',current_chapter=?,chapters_total=?,chapters_done=?,
+		images_total=?,images_done=?,bytes=?,speed_bps=0,finished_at=? where id=?`,
+		currentChapter, chTotal, chDone, imgTotal, imgDone, bytes, now(), id)
 	return err
 }
 
