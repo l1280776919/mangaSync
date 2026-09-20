@@ -300,7 +300,7 @@ function processPreloadQueue() {
   const my = gen
   while (activePreloadCount < MAX_PRELOAD_CONCURRENCY && preloadQueue.length > 0) {
     const pageNum = preloadQueue.shift()
-    if (loaded[pageNum] || failed[pageNum] || preloading[pageNum]) continue
+    if (preloading[pageNum] || loaded[pageNum]) continue
     
     preloading[pageNum] = true
     activePreloadCount++
@@ -309,8 +309,8 @@ function processPreloadQueue() {
     im.onload = () => {
       activePreloadCount--
       if (my === gen) {
-        loaded[pageNum] = true
         delete preloading[pageNum]
+        // 仅记录真实像素尺寸，精确占位；DOM 真实图片的渲染状态交由 img 的 @load 触发
         if (im.naturalWidth) natSize[pageNum] = [im.naturalWidth, im.naturalHeight]
       }
       processPreloadQueue()
