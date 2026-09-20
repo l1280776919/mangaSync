@@ -662,3 +662,110 @@ a {
 .ms-has-mbar {
   padding-bottom: 80px;
 }
+
+/* ---------------- 全局滚动条美化 ---------------- */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 999px;
+  transition: background 0.2s;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.55);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------------- 封面微动效与暗角遮罩 ---------------- */
+.ms-comic-cover {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  background: #f1f5f9;
+  overflow: hidden;
+  cursor: pointer;
+}
+.ms-comic-cover img,
+.ms-comic-cover :deep(img) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.35s cubic-bezier(0.25, 1, 0.5, 1);
+}
+.ms-comic:hover .ms-comic-cover img,
+.ms-comic:hover .ms-comic-cover :deep(img) {
+  transform: scale(1.04);
+}
+.ms-comic-cover::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(15, 23, 42, 0.4) 0%, transparent 45%);
+  pointer-events: none;
+  opacity: 0.6;
+  transition: opacity 0.25s ease;
+}
+.ms-comic:hover .ms-comic-cover::after {
+  opacity: 0.85;
+}
+
+/* ---------------- 卡片与面板质感升级 ---------------- */
+:root {
+  --ms-bg: #f8fafc;
+  --ms-bg-soft: #f1f5f9;
+  --ms-panel: #ffffff;
+  --ms-border: #e2e8f0;
+  --ms-border-strong: #cbd5e1;
+  --ms-text: #0f172a;
+  --ms-text-dim: #64748b;
+  --ms-accent: #2563eb;
+  --ms-radius: 12px;
+  --ms-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), 0 4px 12px rgba(15, 23, 42, 0.03);
+  --ms-shadow-hover: 0 12px 28px -4px rgba(15, 23, 42, 0.08), 0 4px 8px -2px rgba(15, 23, 42, 0.03);
+}
+
+.ms-panel {
+  border-radius: var(--ms-radius);
+  box-shadow: var(--ms-shadow);
+  border: 1px solid var(--ms-border);
+}
+
+.ms-stat {
+  border-radius: var(--ms-radius);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.ms-stat:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--ms-shadow);
+  border-color: var(--el-color-primary-light-7);
+}
+
+.el-button {
+  border-radius: 8px;
+  font-weight: 500;
+  transition: all 0.18s ease;
+}
+
+.el-button--primary {
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.15);
+}
+
+.el-button--primary:hover {
+  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.25);
+  transform: translateY(-1px);
+}
+
+.el-button--small {
+  border-radius: 6px;
+}
+
+.el-tag {
+  border-radius: 6px;
+}

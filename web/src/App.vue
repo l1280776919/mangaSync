@@ -1,6 +1,14 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import {
+  Files,
+  UserFilled,
+  Expand,
+  Loading,
+  Clock,
+  Refresh
+} from '@element-plus/icons-vue'
 import { useAppStore } from '@/store/app'
 import { auth } from '@/store/auth'
 import { logout } from '@/composables/useAuth'
@@ -14,14 +22,10 @@ const isMobile = useIsMobile()
 const drawerOpen = ref(false)
 const loggingOut = ref(false)
 
-/** 登录 / 首改密码页是独立整屏页，不套侧边栏外壳 */
 const AUTH_PAGES = ['/login', '/change-password']
-/** 裸页面：登录/改密/在线阅读器 —— 整屏渲染，不套侧边栏 */
 const isAuthPage = computed(() => route.meta?.bare === true || AUTH_PAGES.includes(route.path))
 const username = computed(() => auth.user?.username || '未登录')
 
-// 导航顺序显式声明（router.getRoutes() 的顺序不可靠）；
-// 标题/图标统一读 router 的 meta，新增页面只改 router.js 一处
 const NAV_PATHS = [
   '/dashboard',
   '/accounts',
@@ -70,7 +74,6 @@ async function onLogout() {
   }
 }
 
-/** 业务页才需要账号 / 统计 / SSE；登录页不需要（省掉一堆 401 请求） */
 function bootstrap() {
   store.startEvents()
   store.loadAccounts().catch(() => {})
@@ -95,15 +98,19 @@ onMounted(async () => {
 </script>
 
 <template>
-  <!-- 登录页 / 强制改密页：整屏独立卡片，不套管理后台外壳 -->
   <router-view v-if="isAuthPage" />
 
   <el-container v-else class="app-shell">
     <!-- 桌面端侧边导航 -->
-    <el-aside v-if="!isMobile" width="196px" class="app-aside">
+    <el-aside v-if="!isMobile" width="206px" class="app-aside">
       <div class="brand">
-        <el-icon :size="20"><Files /></el-icon>
-        <span>mangaSync</span>
+        <div class="brand-logo-badge">
+          <el-icon :size="18"><Files /></el-icon>
+        </div>
+        <div class="brand-text">
+          <span class="brand-name">mangaSync</span>
+          <span class="brand-tag">PRO</span>
+        </div>
       </div>
       <el-menu :default-active="activePath" class="app-menu" @select="go">
         <el-menu-item v-for="m in MENU" :key="m.path" :index="m.path">
@@ -141,13 +148,18 @@ onMounted(async () => {
     <el-drawer
       v-model="drawerOpen"
       direction="ltr"
-      size="220px"
+      size="230px"
       :with-header="false"
       class="nav-drawer"
     >
       <div class="brand">
-        <el-icon :size="20"><Files /></el-icon>
-        <span>mangaSync</span>
+        <div class="brand-logo-badge">
+          <el-icon :size="18"><Files /></el-icon>
+        </div>
+        <div class="brand-text">
+          <span class="brand-name">mangaSync</span>
+          <span class="brand-tag">PRO</span>
+        </div>
       </div>
       <el-menu :default-active="activePath" class="app-menu" @select="go">
         <el-menu-item v-for="m in MENU" :key="m.path" :index="m.path">
@@ -231,38 +243,80 @@ onMounted(async () => {
 .app-aside {
   display: flex;
   flex-direction: column;
-  background: var(--ms-panel);
+  background: #ffffff;
   border-right: 1px solid var(--ms-border);
   padding: 0;
+  box-shadow: 1px 0 3px rgba(15, 23, 42, 0.02);
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 16px 18px;
+  gap: 10px;
+  padding: 18px 18px 14px;
+}
+
+.brand-logo-badge {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
+  flex-shrink: 0;
+}
+
+.brand-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.brand-name {
   font-size: 16px;
   font-weight: 700;
-  letter-spacing: 0.3px;
+  letter-spacing: -0.3px;
   color: var(--ms-text);
+}
+
+.brand-tag {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  letter-spacing: 0.5px;
 }
 
 .app-menu {
   flex: 1;
   border-right: none;
   background: transparent;
+  padding: 4px 0;
 }
 
 .app-menu :deep(.el-menu-item) {
-  height: 46px;
-  margin: 2px 8px;
-  border-radius: 8px;
+  height: 44px;
+  margin: 3px 10px;
+  border-radius: 9px;
+  font-weight: 500;
+  transition: all 0.18s ease;
+}
+
+.app-menu :deep(.el-menu-item:hover) {
+  background: var(--ms-bg-soft);
+  color: var(--el-color-primary);
 }
 
 .app-menu :deep(.el-menu-item.is-active) {
   background: var(--el-color-primary-light-9);
   color: var(--el-color-primary);
   font-weight: 600;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.06);
 }
 
 .menu-badge {
@@ -270,9 +324,10 @@ onMounted(async () => {
 }
 
 .aside-foot {
-  padding: 10px 16px 12px;
+  padding: 12px 16px 14px;
   font-size: 12px;
   border-top: 1px solid var(--ms-border);
+  background: #fafbfc;
 }
 
 .foot-row {
@@ -301,6 +356,7 @@ onMounted(async () => {
 
 .foot-ver {
   flex-shrink: 0;
+  font-size: 11px;
 }
 
 .app-main-wrap {
@@ -313,22 +369,26 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 12px;
   height: 56px;
-  padding: 0 16px;
-  background: var(--ms-panel);
+  padding: 0 20px;
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--ms-border);
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
+  position: relative;
+  z-index: 10;
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
 .header-title {
   font-size: 16px;
   font-weight: 600;
+  letter-spacing: -0.2px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -337,25 +397,25 @@ onMounted(async () => {
 .header-right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-shrink: 0;
 }
 
 .sse-tag {
   flex-shrink: 0;
+  border-radius: 6px;
 }
 
 .app-main {
-  padding: 16px;
+  padding: 16px 20px 24px;
   overflow-y: auto;
   background: var(--ms-bg);
 }
 
-/* 手机端：更紧凑的头部与内容边距，长标题省略而不是撑破 */
 @media (max-width: 768px) {
   .app-header {
     height: 52px;
-    padding: 0 8px;
+    padding: 0 10px;
     gap: 6px;
   }
 
@@ -374,16 +434,16 @@ onMounted(async () => {
 </style>
 
 <style>
-/* 移动端抽屉里的导航（非 scoped，抽屉挂到 body 下） */
 .nav-drawer .el-drawer__body {
   padding: 0;
   display: flex;
   flex-direction: column;
-  background: var(--ms-panel);
+  background: #ffffff;
 }
 
 .nav-drawer .el-menu-item.is-active {
   background: var(--el-color-primary-light-9);
   color: var(--el-color-primary);
+  font-weight: 600;
 }
 </style>

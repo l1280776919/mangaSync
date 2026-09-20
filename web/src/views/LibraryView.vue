@@ -2,24 +2,54 @@
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  Collection,
+  Tickets,
+  Picture,
+  FolderOpened,
+  Search,
+  Reading,
+  Document,
+  Coin,
+  Clock,
+  MoreFilled,
+  Delete,
+  InfoFilled
+} from '@element-plus/icons-vue'
 import api from '@/api'
 import { useAppStore } from '@/store/app'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { useLatestRequest } from '@/composables/useLatestRequest'
 import { useViewActive } from '@/composables/useViewActive'
 import CoverImage from '@/components/CoverImage.vue'
+import ComicDetailDialog from '@/components/ComicDetailDialog.vue'
 import KindTag from '@/components/KindTag.vue'
 import PageBar from '@/components/PageBar.vue'
 import StatCard from '@/components/StatCard.vue'
 import { KIND_OPTIONS, formatBytes, formatTime, fromNow } from '@/utils/format'
 import { readerPath } from '@/utils/reader'
 
-/* 手机端：宽表格换成 2 列封面卡片网格 */
 const isMobile = useIsMobile()
 const router = useRouter()
 const store = useAppStore()
 
-/** 打开在线阅读器（已下载的章节本地直发，未下载的回源并还原乱序） */
+// 视图切换：卡片 / 表格，默认卡片模式
+const viewMode = ref('card')
+
+// 详情弹窗
+const detailVisible = ref(false)
+const detailComic = ref(null)
+
+function openDetail(row) {
+  detailComic.value = {
+    kind: row.kind,
+    comicId: row.comicId,
+    title: row.title
+  }
+  detailVisible.value = true
+}
+
+/** 打开在线阅读器（已下载的章节本地直发） */
 function openReader(row, order = 1) {
   const path = readerPath(row, order)
   if (path) router.push(path)
@@ -43,7 +73,6 @@ const sortOptions = [
   { value: 'size', label: '按大小' }
 ]
 
-/** 列表请求：只认最后一次（快速搜索 / 翻页不会被旧响应覆盖），并带超时 */
 const req = useLatestRequest()
 
 async function load() {
@@ -80,30 +109,33 @@ function search() {
 async function deleteItem(row) {
   try {
     await ElMessageBox.confirm(
-      `确定从漫画库中移除《${row.title}》的记录吗？`,
+      `确定从漫画库中移除《${row.title}》的记录吗？（不会删除磁盘文件）`,
       '移除记录',
       { type: 'warning', confirmButtonText: '仅移除记录', cancelButtonText: '取消' }
     )
   } catch (_) {
     return
   }
+  deletingId.value = row.id
   try {
     await api.deleteLibrary(row.id, false)
     ElMessage.success('记录已移除')
     load()
   } catch (e) {
     /* api.js 已提示 */
+  } finally {
+    deletingId.value = null
   }
 }
 
 async function deleteWithFiles(row) {
   try {
     await ElMessageBox.confirm(
-      `确定删除《${row.title}》并同时删除磁盘目录吗？\n${row.path || ''}\n此操作不可恢复！`,
-      '危险操作：删除文件',
+      `确定彻底删除《${row.title}》吗？警告：这将永久删除磁盘上的全部漫画图片与文件！`,
+      '彻底删除',
       {
         type: 'error',
-        confirmButtonText: '删除记录 + 文件',
+        confirmButtonText: '连同文件彻底删除',
         cancelButtonText: '取消',
         confirmButtonClass: 'el-button--danger'
       }
@@ -115,7 +147,7 @@ async function deleteWithFiles(row) {
   deletingFiles.value = true
   try {
     await api.deleteLibrary(row.id, true)
-    ElMessage.success('已删除记录与文件')
+    ElMessage.success('文件与记录已删除')
     load()
   } catch (e) {
     /* api.js 已提示 */
@@ -123,6 +155,12 @@ async function deleteWithFiles(row) {
     deletingId.value = null
     deletingFiles.value = false
   }
+}
+
+function handleCmd(cmd, row) {
+  if (cmd === 'deleteItem') deleteItem(row)
+  else if (cmd === 'deleteWithFiles') deleteWithFiles(row)
+  else if (cmd === 'detail') openDetail(row)
 }
 
 async function rescan() {
@@ -141,10 +179,8 @@ async function rescan() {
 
 const sizeText = computed(() => formatBytes(stats.value?.bytes))
 
-/* keep-alive 缓存后 onMounted 只跑一次：切回漫画库要重新拉（刚下完的漫画要出现） */
 const active = useViewActive({ onEnter: load })
 
-/** 顶栏「刷新」 */
 watch(
   () => store.refreshTick,
   () => {
@@ -156,23 +192,31 @@ watch(
 <template>
   <div class="ms-panel">
     <div class="ms-panel-title">
-      <span>
-        漫画库
+      <div class="title-left">
+        <span>漫画库</span>
         <span class="ms-sub">· 共 {{ total }} 部</span>
-      </span>
+      </div>
       <div class="head-actions">
+        <div v-if="!isMobile" class="view-switch">
+          <el-radio-group v-model="viewMode" size="small">
+            <el-radio-button value="card">卡片</el-radio-button>
+            <el-radio-button value="table">表格</el-radio-button>
+          </el-radio-group>
+        </div>
         <el-button size="small" :loading="loading" @click="load">刷新</el-button>
         <el-button size="small" type="primary" :loading="scanning" @click="rescan">重新扫描目录</el-button>
       </div>
     </div>
 
+    <!-- 顶部数据概览 -->
     <div class="ms-stat-grid mb14">
-      <StatCard label="作品数" :value="stats?.comics ?? '—'" icon="Collection" sub="库内漫画总数" />
-      <StatCard label="章节数" :value="stats?.chapters ?? '—'" icon="Tickets" />
-      <StatCard label="图片数" :value="stats?.images ?? '—'" icon="Picture" />
-      <StatCard label="占用空间" :value="sizeText" icon="FolderOpened" />
+      <StatCard label="作品数" :value="stats?.comics ?? '—'" icon="Collection" color="#3b82f6" sub="库内漫画总数" />
+      <StatCard label="章节数" :value="stats?.chapters ?? '—'" icon="Tickets" color="#10b981" sub="全部章节合计" />
+      <StatCard label="图片数" :value="stats?.images ?? '—'" icon="Picture" color="#8b5cf6" sub="已收录图片" />
+      <StatCard label="占用空间" :value="sizeText" icon="FolderOpened" color="#f59e0b" sub="本地存储空间" />
     </div>
 
+    <!-- 过滤搜索栏 -->
     <div class="ms-toolbar">
       <el-select v-model="kind" class="kind-select" placeholder="全部源" clearable @change="search">
         <el-option label="全部源" value="" />
@@ -194,10 +238,11 @@ watch(
       <el-button type="primary" :loading="loading" @click="search">搜索</el-button>
     </div>
 
-    <!-- 手机端：2 列封面卡片（宽屏仍是表格） -->
-    <div v-if="isMobile" v-loading="loading" class="ms-comic-grid">
-      <div v-for="row in items" :key="row.id" class="ms-comic">
-        <div class="ms-comic-cover">
+    <!-- 卡片视图（桌面端卡片模式 或 手机端） -->
+    <div v-if="viewMode === 'card' || isMobile" v-loading="loading" class="ms-comic-grid">
+      <div v-for="row in items" :key="row.id" class="ms-comic lib-card">
+        <!-- 封面区 -->
+        <div class="ms-comic-cover" @click="openReader(row)">
           <CoverImage :kind="row.kind" :comic-id="row.comicId" :src="row.cover" :title="row.title" />
           <div class="ms-comic-tags">
             <KindTag :kind="row.kind" />
@@ -205,39 +250,87 @@ watch(
               {{ row.source === 'scan' ? '扫描' : '数据库' }}
             </el-tag>
           </div>
+          <div class="cover-quick-read">
+            <el-icon :size="16"><Reading /></el-icon>
+            <span>立即阅读</span>
+          </div>
         </div>
+
+        <!-- 内容区 -->
         <div class="ms-comic-body">
-          <div class="ms-comic-title" :title="row.title">{{ row.title || '未命名' }}</div>
-          <div class="ms-comic-meta ms-mono" :title="row.comicId">{{ row.comicId }}</div>
-          <div class="lib-meta">
-            <span>{{ row.chapters ?? 0 }} 章</span>
-            <span>{{ row.images ?? 0 }} 图</span>
-            <span>{{ formatBytes(row.bytes) }}</span>
+          <div class="ms-comic-title" :title="row.title" @click="openReader(row)">
+            {{ row.title || '未命名' }}
           </div>
-          <div class="ms-comic-meta" :title="row.path">{{ row.path || '—' }}</div>
-          <div class="ms-comic-meta" :title="formatTime(row.updatedAt, true)">
-            {{ fromNow(row.updatedAt) }} 更新
+          <div class="ms-comic-meta ms-mono" :title="row.comicId">
+            {{ row.comicId }}
           </div>
-          <div class="lib-actions">
-            <el-button size="small" type="primary" @click="openReader(row)">阅读</el-button>
-            <el-button size="small" :loading="deletingId === row.id" @click="deleteItem(row)">移除记录</el-button>
-            <el-button
-              size="small"
-              type="danger"
-              plain
-              :loading="deletingId === row.id && deletingFiles"
-              @click="deleteWithFiles(row)"
-            >
-              删除文件
+
+          <!-- 章节 / 图片 / 占用空间 药丸栏 -->
+          <div class="lib-meta-pills">
+            <span class="pill" title="章节数">
+              <el-icon :size="11"><Document /></el-icon>
+              {{ row.chapters ?? 0 }} 章
+            </span>
+            <span class="pill" title="图片数">
+              <el-icon :size="11"><Picture /></el-icon>
+              {{ row.images ?? 0 }} 图
+            </span>
+            <span class="pill pill-size" title="大小">
+              <el-icon :size="11"><Coin /></el-icon>
+              {{ formatBytes(row.bytes) }}
+            </span>
+          </div>
+
+          <!-- 路径小字 -->
+          <div class="ms-comic-meta path-row" :title="row.path">
+            {{ row.path || '—' }}
+          </div>
+
+          <!-- 时间信息 -->
+          <div class="lib-time-row" :title="formatTime(row.updatedAt, true)">
+            <el-icon :size="11"><Clock /></el-icon>
+            <span>{{ fromNow(row.updatedAt) }} 更新</span>
+          </div>
+
+          <!-- 底部操作按钮 -->
+          <div class="ms-comic-actions lib-card-actions">
+            <el-button size="small" type="primary" @click.stop="openReader(row)">
+              <el-icon :size="13"><Reading /></el-icon>
+              <span>阅读</span>
             </el-button>
+            <el-button size="small" plain @click.stop="openDetail(row)">
+              详情
+            </el-button>
+            <el-dropdown trigger="click" @command="(cmd) => handleCmd(cmd, row)">
+              <el-button size="small" class="more-btn">
+                <el-icon :size="12"><MoreFilled /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="detail">
+                    <el-icon><InfoFilled /></el-icon> 查看详情
+                  </el-dropdown-item>
+                  <el-dropdown-item command="deleteItem">
+                    <el-icon><Delete /></el-icon> 移除记录
+                  </el-dropdown-item>
+                  <el-dropdown-item command="deleteWithFiles" divided style="color: var(--el-color-danger)">
+                    <el-icon><Delete /></el-icon> 删除文件
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </div>
       </div>
+
+      <!-- 空状态 -->
       <div v-if="!items.length && !loading" class="ms-empty lib-empty">
-        漫画库还是空的，可以先到「收藏」页下载几本，或点「重新扫描目录」
+        <el-icon :size="36" style="margin-bottom: 8px; color: var(--ms-text-dim); opacity: 0.6"><FolderOpened /></el-icon>
+        <div>漫画库还是空的，可以先到「收藏」页下载几本，或点「重新扫描目录」</div>
       </div>
     </div>
 
+    <!-- 表格视图（仅桌面端切表格时展示） -->
     <el-table
       v-else
       v-loading="loading"
@@ -245,14 +338,22 @@ watch(
       size="small"
       empty-text="漫画库还是空的，可以先到「收藏」页下载几本，或点「重新扫描目录」"
       row-key="id"
+      class="lib-table"
     >
       <el-table-column prop="id" label="#" width="58" />
       <el-table-column label="源" width="76">
         <template #default="{ row }"><KindTag :kind="row.kind" /></template>
       </el-table-column>
+      <el-table-column label="封面" width="66">
+        <template #default="{ row }">
+          <div class="table-cover-wrap" @click="openReader(row)">
+            <CoverImage :kind="row.kind" :comic-id="row.comicId" :src="row.cover" :title="row.title" />
+          </div>
+        </template>
+      </el-table-column>
       <el-table-column label="标题" min-width="200">
         <template #default="{ row }">
-          <div class="cell-title">{{ row.title || '未命名' }}</div>
+          <div class="cell-title hover-link" @click="openReader(row)">{{ row.title || '未命名' }}</div>
           <div class="cell-sub ms-mono">{{ row.comicId }}</div>
         </template>
       </el-table-column>
@@ -282,28 +383,49 @@ watch(
           <span :title="formatTime(row.updatedAt, true)">{{ fromNow(row.updatedAt) }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="230" fixed="right">
+      <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
           <el-button size="small" type="primary" @click="openReader(row)">阅读</el-button>
-          <el-button size="small" :loading="deletingId === row.id" @click="deleteItem(row)">移除记录</el-button>
-          <el-button
-            size="small"
-            type="danger"
-            plain
-            :loading="deletingId === row.id && deletingFiles"
-            @click="deleteWithFiles(row)"
-          >
-            删除
-          </el-button>
+          <el-button size="small" plain @click="openDetail(row)">详情</el-button>
+          <el-dropdown trigger="click" @command="(cmd) => handleCmd(cmd, row)">
+            <el-button size="small" text>
+              <el-icon><MoreFilled /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="deleteItem">移除记录</el-dropdown-item>
+                <el-dropdown-item command="deleteWithFiles" divided style="color: var(--el-color-danger)">删除文件</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </template>
       </el-table-column>
     </el-table>
 
     <PageBar v-model:page="page" v-model:page-size="pageSize" :total="total" :disabled="loading" @change="load" />
+
+    <!-- 漫画详情弹窗 -->
+    <ComicDetailDialog v-model="detailVisible" :comic="detailComic" :pick-chapters="false" />
   </div>
 </template>
 
 <style scoped>
+.title-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.view-switch {
+  margin-right: 4px;
+}
+
 .kind-select {
   width: 150px;
 }
@@ -323,9 +445,26 @@ watch(
   white-space: nowrap;
 }
 
+.hover-link {
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.hover-link:hover {
+  color: var(--el-color-primary);
+}
+
 .cell-sub {
   font-size: 10px;
   color: var(--ms-text-dim);
+}
+
+.table-cover-wrap {
+  width: 44px;
+  height: 58px;
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
 }
 
 .path {
@@ -338,35 +477,116 @@ watch(
   vertical-align: bottom;
 }
 
+/* 漫画库卡片专属定制 */
+.lib-card {
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.22s ease, border-color 0.2s ease;
+}
+
+.lib-card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--ms-shadow-hover);
+  border-color: var(--el-color-primary-light-5);
+}
+
+.ms-comic-title {
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.ms-comic-title:hover {
+  color: var(--el-color-primary);
+}
+
+.cover-quick-read {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 8px 0;
+  background: linear-gradient(to top, rgba(15, 23, 42, 0.88), transparent);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.ms-comic:hover .cover-quick-read {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.lib-meta-pills {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 2px 0;
+}
+
+.lib-meta-pills .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  padding: 1px 6px;
+  background: var(--ms-bg-soft);
+  border: 1px solid var(--ms-border);
+  border-radius: 4px;
+  color: var(--ms-text-dim);
+}
+
+.lib-meta-pills .pill-size {
+  color: var(--el-color-primary);
+  font-weight: 500;
+}
+
+.path-row {
+  font-size: 10px;
+  color: var(--ms-text-dim);
+}
+
+.lib-time-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--ms-text-dim);
+  margin-top: 1px;
+}
+
+.lib-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.lib-card-actions :deep(.el-button) {
+  flex: 1;
+  margin-left: 0;
+}
+
+.lib-card-actions :deep(.more-btn) {
+  flex: 0 0 32px;
+  padding: 0;
+}
+
+.lib-empty {
+  grid-column: 1 / -1;
+}
+
 @media (max-width: 640px) {
   .kind-select,
   .sort-select {
     width: 100%;
   }
-}
-
-/* 手机端卡片网格里的信息行与操作按钮 */
-.lib-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 11px;
-  color: var(--ms-text-dim);
-}
-
-.lib-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding-top: 4px;
-}
-
-.lib-actions :deep(.el-button) {
-  width: 100%;
-  margin-left: 0;
-}
-
-.lib-empty {
-  grid-column: 1 / -1;
 }
 </style>

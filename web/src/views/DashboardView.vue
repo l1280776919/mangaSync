@@ -151,13 +151,15 @@ onUnmounted(() => {
   clearTickTimer()
 })
 
+import { ArrowRight } from '@element-plus/icons-vue'
+
 const shortcuts = [
-  { label: '账号管理', icon: 'User', path: '/accounts' },
-  { label: '我的收藏', icon: 'Star', path: '/favorites' },
-  { label: '搜索漫画', icon: 'Search', path: '/search' },
-  { label: '下载任务', icon: 'Download', path: '/downloads' },
-  { label: '漫画库', icon: 'Collection', path: '/library' },
-  { label: '系统设置', icon: 'Setting', path: '/settings' }
+  { label: '账号管理', desc: '源账号与状态', icon: 'User', path: '/accounts', color: '#3b82f6' },
+  { label: '我的收藏', desc: '收藏列表与批量下载', icon: 'Star', path: '/favorites', color: '#f59e0b' },
+  { label: '搜索漫画', desc: '跨平台检索书源', icon: 'Search', path: '/search', color: '#8b5cf6' },
+  { label: '下载任务', desc: '队列监控与进度', icon: 'Download', path: '/downloads', color: '#10b981' },
+  { label: '漫画库', desc: '海报墙与在线阅读', icon: 'Collection', path: '/library', color: '#ec4899' },
+  { label: '系统设置', desc: '存储与核心参数', icon: 'Setting', path: '/settings', color: '#64748b' }
 ]
 </script>
 
@@ -178,15 +180,16 @@ const shortcuts = [
       </div>
 
       <div v-loading="loadingStats" class="ms-stat-grid">
-        <StatCard label="账号数" :value="stats?.accounts ?? '—'" icon="User" sub="已绑定源账号" clickable @click="router.push('/accounts')" />
-        <StatCard label="收藏数" :value="stats?.favorites ?? '—'" icon="Star" sub="所有账号收藏合计" clickable @click="router.push('/favorites')" />
-        <StatCard label="下载中" :value="dl.running ?? '—'" icon="Loading" color="#2f6fed" :sub="`排队 ${dl.queued ?? 0} 个`" clickable @click="router.push('/downloads')" />
-        <StatCard label="已完成" :value="dl.done ?? '—'" icon="CircleCheck" color="#16a34a" sub="累计完成任务" clickable @click="router.push('/downloads')" />
-        <StatCard label="失败" :value="dl.failed ?? '—'" icon="CircleClose" color="#dc2626" sub="可重试" clickable @click="router.push('/downloads')" />
+        <StatCard label="账号数" :value="stats?.accounts ?? '—'" icon="User" color="#3b82f6" sub="已绑定源账号" clickable @click="router.push('/accounts')" />
+        <StatCard label="收藏数" :value="stats?.favorites ?? '—'" icon="Star" color="#f59e0b" sub="所有账号收藏合计" clickable @click="router.push('/favorites')" />
+        <StatCard label="下载中" :value="dl.running ?? '—'" icon="Loading" color="#2563eb" :sub="`排队 ${dl.queued ?? 0} 个`" clickable @click="router.push('/downloads')" />
+        <StatCard label="已完成" :value="dl.done ?? '—'" icon="CircleCheck" color="#10b981" sub="累计完成任务" clickable @click="router.push('/downloads')" />
+        <StatCard label="失败" :value="dl.failed ?? '—'" icon="CircleClose" color="#ef4444" sub="可重试" clickable @click="router.push('/downloads')" />
         <StatCard
           label="漫画库大小"
           :value="formatBytes(lib.bytes)"
           icon="FolderOpened"
+          color="#8b5cf6"
           :sub="`${lib.comics ?? 0} 部 / ${lib.images ?? 0} 图`"
           clickable
           @click="router.push('/library')"
@@ -195,9 +198,10 @@ const shortcuts = [
           label="磁盘剩余"
           :value="formatBytes(disk.freeBytes)"
           icon="Coin"
+          color="#64748b"
           :sub="disk.totalBytes ? `共 ${formatBytes(disk.totalBytes)}` : '—'"
         />
-        <StatCard label="实时速度" :value="formatSpeed(totalSpeed)" icon="Download" :sub="`${activeJobs.length} 个活动任务`" />
+        <StatCard label="实时速度" :value="formatSpeed(totalSpeed)" icon="Download" color="#06b6d4" :sub="`${activeJobs.length} 个活动任务`" />
       </div>
     </div>
 
@@ -311,11 +315,22 @@ const shortcuts = [
 
     <div class="ms-panel">
       <div class="ms-panel-title">快捷入口</div>
-      <div class="shortcuts">
-        <el-button v-for="s in shortcuts" :key="s.path" @click="router.push(s.path)">
-          <el-icon><component :is="s.icon" /></el-icon>
-          <span>{{ s.label }}</span>
-        </el-button>
+      <div class="shortcut-grid">
+        <div
+          v-for="s in shortcuts"
+          :key="s.path"
+          class="shortcut-card"
+          @click="router.push(s.path)"
+        >
+          <div class="shortcut-icon-wrap" :style="{ backgroundColor: `${s.color}14`, color: s.color }">
+            <el-icon :size="20"><component :is="s.icon" /></el-icon>
+          </div>
+          <div class="shortcut-info">
+            <div class="shortcut-title">{{ s.label }}</div>
+            <div class="shortcut-desc">{{ s.desc }}</div>
+          </div>
+          <el-icon class="shortcut-arrow"><ArrowRight /></el-icon>
+        </div>
       </div>
     </div>
 
@@ -355,4 +370,73 @@ const shortcuts = [
     flex: 1 1 44%;
   }
 }
+
+.shortcut-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.shortcut-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--ms-bg-soft);
+  border: 1px solid var(--ms-border);
+  border-radius: var(--ms-radius);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.shortcut-card:hover {
+  background: #ffffff;
+  border-color: var(--el-color-primary-light-7);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+  transform: translateY(-2px);
+}
+
+.shortcut-icon-wrap {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.shortcut-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.shortcut-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ms-text);
+  line-height: 1.25;
+}
+
+.shortcut-desc {
+  font-size: 11px;
+  color: var(--ms-text-dim);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shortcut-arrow {
+  font-size: 14px;
+  color: var(--ms-border-strong);
+  transition: transform 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.shortcut-card:hover .shortcut-arrow {
+  color: var(--el-color-primary);
+  transform: translateX(2px);
+}
+
 </style>
