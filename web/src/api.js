@@ -173,6 +173,10 @@ export const api = {
   removeFavorite: (accountId, comicId) =>
     request(`/accounts/${accountId}/favorites/${encodeURIComponent(comicId)}`, { method: 'DELETE' }),
 
+  // 在线阅读
+  readerMeta: (kind, comicId, order) =>
+    request(`/reader/${kind}/${encodeURIComponent(comicId)}/${order}/meta`, { silent: true }),
+
   // 漫画
   comic: (kind, comicId) =>
     request(`/comics/${kind}/${encodeURIComponent(comicId)}`),

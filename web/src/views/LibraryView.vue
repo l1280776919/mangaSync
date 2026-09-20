@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api'
 import { useIsMobile } from '@/composables/useIsMobile'
@@ -11,6 +12,13 @@ import { KIND_OPTIONS, formatBytes, formatTime, fromNow } from '@/utils/format'
 
 /* 手机端：宽表格换成 2 列封面卡片网格 */
 const isMobile = useIsMobile()
+const router = useRouter()
+
+/** 打开在线阅读器（已下载的章节本地直发，未下载的回源并还原乱序） */
+function openReader(row, order = 1) {
+  if (!row?.kind || !row?.comicId) return
+  router.push(`/reader/${row.kind}/${encodeURIComponent(row.comicId)}/${order}`)
+}
 
 const kind = ref('')
 const keyword = ref('')
@@ -189,6 +197,7 @@ onMounted(load)
             {{ fromNow(row.updatedAt) }} 更新
           </div>
           <div class="lib-actions">
+            <el-button size="small" type="primary" @click="openReader(row)">阅读</el-button>
             <el-button size="small" :loading="deletingId === row.id" @click="deleteItem(row)">移除记录</el-button>
             <el-button
               size="small"
@@ -251,8 +260,9 @@ onMounted(load)
           <span :title="formatTime(row.updatedAt, true)">{{ fromNow(row.updatedAt) }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="180" fixed="right">
+      <el-table-column label="操作" width="230" fixed="right">
         <template #default="{ row }">
+          <el-button size="small" type="primary" @click="openReader(row)">阅读</el-button>
           <el-button size="small" :loading="deletingId === row.id" @click="deleteItem(row)">移除记录</el-button>
           <el-button
             size="small"

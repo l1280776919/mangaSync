@@ -47,6 +47,14 @@ type Pica struct {
 	imageWorkers int
 	api          *http.Client
 	img          *http.Client
+
+	urlMu    sync.Mutex
+	urlCache map[string]picaURLs
+}
+
+type picaURLs struct {
+	at   time.Time
+	urls []string
 }
 
 func NewPica(proxy, quality string, imageWorkers int) *Pica {
@@ -54,6 +62,7 @@ func NewPica(proxy, quality string, imageWorkers int) *Pica {
 		proxy:        proxy,
 		quality:      quality,
 		imageWorkers: max(1, imageWorkers),
+		urlCache:     map[string]picaURLs{},
 		api:          newHTTPClient(proxy, 30*time.Second),
 		img:          newHTTPClient(proxy, 120*time.Second),
 	}
@@ -433,6 +442,50 @@ func (p *Pica) toggleFavorite(ctx context.Context, cred *Cred, comicID string) (
 }
 
 // Cover 取封面原图（thumb 有两种拼法，依次尝试）
+// Pages 某章页数（在线阅读）
+func (p *Pica) Pages(ctx context.Context, cred *Cred, comicID string, order int) (int, string, error) {
+	urls, err := p.chapterImageURLsCached(ctx, cred, comicID, order)
+	if err != nil {
+		return 0, "", err
+	}
+	return len(urls), "", nil
+}
+
+// PageImage 某章第 page 页图片（在线阅读）
+func (p *Pica) PageImage(ctx context.Context, cred *Cred, comicID string, order, page int, _ bool) ([]byte, string, error) {
+	urls, err := p.chapterImageURLsCached(ctx, cred, comicID, order)
+	if err != nil {
+		return nil, "", err
+	}
+	if page < 1 || page > len(urls) {
+		return nil, "", fmt.Errorf("页码 %d 超出范围（本章共 %d 页）", page, len(urls))
+	}
+	b, ct, err := p.fetchImage(ctx, urls[page-1], "", "")
+	if err != nil {
+		return nil, "", err
+	}
+	return b, orDefault(ct, "image/jpeg"), nil
+}
+
+// chapterImageURLsCached 给章节图片地址加 10 分钟内存缓存（阅读器逐页拉取时免得反复请求）
+func (p *Pica) chapterImageURLsCached(ctx context.Context, cred *Cred, comicID string, order int) ([]string, error) {
+	key := fmt.Sprintf("%s:%d", comicID, order)
+	p.urlMu.Lock()
+	if e, ok := p.urlCache[key]; ok && time.Since(e.at) < 10*time.Minute {
+		p.urlMu.Unlock()
+		return e.urls, nil
+	}
+	p.urlMu.Unlock()
+	urls, err := p.chapterImageURLs(ctx, cred, comicID, order)
+	if err != nil {
+		return nil, err
+	}
+	p.urlMu.Lock()
+	p.urlCache[key] = picaURLs{at: time.Now(), urls: urls}
+	p.urlMu.Unlock()
+	return urls, nil
+}
+
 func (p *Pica) Cover(ctx context.Context, cred *Cred, comicID string) ([]byte, string, error) {
 	token := ""
 	if cred != nil {

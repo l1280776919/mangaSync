@@ -25,6 +25,13 @@ const routes = [
     meta: { title: '修改密码', bare: true }
   },
   {
+    // 在线阅读器：整屏独立页面（不带侧边栏）
+    path: '/reader/:kind/:comicId/:order',
+    name: 'reader',
+    component: () => import('@/views/ReaderView.vue'),
+    meta: { title: '阅读', bare: true }
+  },
+  {
     path: '/dashboard',
     name: 'dashboard',
     component: () => import('@/views/DashboardView.vue'),

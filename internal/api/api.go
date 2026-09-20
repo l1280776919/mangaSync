@@ -56,6 +56,10 @@ func (s *Server) Routes() http.Handler {
 	m.HandleFunc("GET /api/comics/{kind}/{comicId}/cover", s.comicCover)
 	m.HandleFunc("GET /api/search", s.search)
 
+	// 在线阅读：本地已下载的图直接发；否则回源并在服务端还原乱序
+	m.HandleFunc("GET /api/reader/{kind}/{comicId}/{order}/meta", s.readerMeta)
+	m.HandleFunc("GET /api/reader/{kind}/{comicId}/{order}/page/{page}", s.readerPage)
+
 	m.HandleFunc("GET /api/downloads", s.listJobs)
 	m.HandleFunc("POST /api/downloads", s.createJob)
 	m.HandleFunc("POST /api/downloads/{id}/cancel", s.cancelJob)

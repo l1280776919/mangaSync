@@ -17,10 +17,12 @@ const props = defineProps({
   showCollect: { type: Boolean, default: false },
   /** 是否显示下载相关按钮 */
   showDownload: { type: Boolean, default: true },
+  /** 是否显示「阅读」按钮（收藏 / 漫画库卡片用） */
+  readable: { type: Boolean, default: false },
   busy: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['download', 'queue', 'collect', 'uncollect', 'toggle', 'open'])
+const emit = defineEmits(['download', 'queue', 'collect', 'uncollect', 'toggle', 'open', 'read'])
 
 const dl = () => downloadStateOf(props.item)
 </script>
@@ -102,6 +104,15 @@ const dl = () => downloadStateOf(props.item)
       </div>
 
       <div class="ms-comic-actions">
+        <el-button
+          v-if="readable"
+          size="small"
+          type="success"
+          plain
+          @click.stop="emit('read', item)"
+        >
+          阅读
+        </el-button>
         <el-button
           v-if="showDownload"
           size="small"

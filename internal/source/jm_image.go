@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"image"
 	"image/draw"
-	_ "image/gif"  // 注册解码器
-	_ "image/jpeg" // 注册解码器
+	_ "image/gif" // 注册解码器
+	"image/jpeg"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -124,33 +124,56 @@ func jmSaveImage(raw []byte, num int, dstPath string) (string, error) {
 		}
 		return dstPath, nil
 	}
+	data, ext, err := jmEncodePage(raw, num, "lossless")
+	if err != nil {
+		return "", err
+	}
+	if ext == "png" {
+		dstPath = strings.TrimSuffix(dstPath, filepath.Ext(dstPath)) + ".png"
+	}
+	if err := writeFileAtomic(dstPath, data); err != nil {
+		return "", err
+	}
+	return dstPath, nil
+}
 
+// jmEncodePage 解码 + 还原乱序 + 编码，返回图片字节与扩展名（不落盘）。
+// mode:
+//   - "lossless"：无损 WebP（下载落盘用，零二次损失，体积大）
+//   - "jpeg"    ：高质量 JPEG（在线阅读用，体积约为无损的 1/4，肉眼看不出差别）
+//
+// 若原图本来没有乱序，两种模式都直接原样返回（零损失、零重编码）。
+func jmEncodePage(raw []byte, num int, mode string) ([]byte, string, error) {
+	if num <= 0 {
+		return raw, "webp", nil
+	}
 	src, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
-		return "", fmt.Errorf("解码失败: %w", err)
+		return nil, "", fmt.Errorf("解码失败: %w", err)
 	}
 	fixed := jmDescramble(src, num)
+
+	if mode == "jpeg" {
+		var jb bytes.Buffer
+		if err := jpeg.Encode(&jb, fixed, &jpeg.Options{Quality: 88}); err != nil {
+			return nil, "", fmt.Errorf("JPEG 编码失败: %w", err)
+		}
+		return jb.Bytes(), "jpg", nil
+	}
 
 	var buf bytes.Buffer
 	if err := nativewebp.Encode(&buf, fixed, nil); err == nil {
 		if out, _, derr := image.Decode(bytes.NewReader(buf.Bytes())); derr == nil && out.Bounds() == fixed.Bounds() {
-			if err := writeFileAtomic(dstPath, buf.Bytes()); err == nil {
-				return dstPath, nil
-			}
-			return "", err
+			return buf.Bytes(), "webp", nil
 		}
 	}
 
 	// 回落：无损 PNG
 	var pngBuf bytes.Buffer
 	if err := png.Encode(&pngBuf, fixed); err != nil {
-		return "", fmt.Errorf("编码失败: %w", err)
+		return nil, "", fmt.Errorf("编码失败: %w", err)
 	}
-	fallback := strings.TrimSuffix(dstPath, filepath.Ext(dstPath)) + ".png"
-	if err := writeFileAtomic(fallback, pngBuf.Bytes()); err != nil {
-		return "", err
-	}
-	return fallback, nil
+	return pngBuf.Bytes(), "png", nil
 }
 
 // writeFileAtomic 先写临时文件再改名，避免中断留下半张图

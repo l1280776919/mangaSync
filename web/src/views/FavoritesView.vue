@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api'
 import { useAppStore } from '@/store/app'
@@ -15,6 +16,13 @@ import { downloadStateOf, formatBytes, formatTime } from '@/utils/format'
 const store = useAppStore()
 /* 手机端：只保留卡片视图 + 底部批量操作栏 */
 const isMobile = useIsMobile()
+const router = useRouter()
+
+/** 在线阅读：已下载章节走本地文件秒开，未下载的回源并在服务端还原乱序 */
+function read(row, order = 1) {
+  if (!row?.comicId) return
+  router.push(`/reader/${row.kind || kind.value}/${encodeURIComponent(row.comicId)}/${order}`)
+}
 
 const accountId = ref(null)
 const keyword = ref('')
@@ -238,10 +246,12 @@ onMounted(async () => {
         :key="`${item.kind}-${item.comicId}`"
         :item="item"
         selectable
+        readable
         :selected="selected.includes(String(item.comicId))"
         favorited
         :busy="removingId === String(item.comicId) || busy"
         @toggle="toggleSelect"
+        @read="read"
         @download="download"
         @queue="openPicker"
         @uncollect="removeFavorite"
@@ -321,8 +331,9 @@ onMounted(async () => {
       <el-table-column label="大小" width="90">
         <template #default="{ row }">{{ formatBytes(row.bytes) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="230" fixed="right">
+      <el-table-column label="操作" width="280" fixed="right">
         <template #default="{ row }">
+          <el-button size="small" type="success" plain @click="read(row)">阅读</el-button>
           <el-button size="small" type="primary" :loading="busy" @click="download(row)">下载</el-button>
           <el-button size="small" @click="openPicker(row)">加入队列</el-button>
           <el-button size="small" type="danger" plain :loading="removingId === String(row.comicId)" @click="removeFavorite(row)">

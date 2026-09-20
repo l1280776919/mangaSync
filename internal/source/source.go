@@ -135,6 +135,12 @@ type Source interface {
 	Kind() string
 	Login(ctx context.Context, username, password string) (*AccountInfo, error)
 	Profile(ctx context.Context, cred *Cred) (*AccountInfo, error)
+
+	// Pages 在线阅读：返回某章的页数与章节名
+	Pages(ctx context.Context, cred *Cred, comicID string, order int) (int, string, error)
+	// PageImage 在线阅读：返回某章第 page 页（从 1 开始）的图片字节与内容类型
+	// preview 为 true 时可用更快更小的编码（手机流量友好）；禁漫的乱序图必须在这里还原
+	PageImage(ctx context.Context, cred *Cred, comicID string, order, page int, preview bool) ([]byte, string, error)
 	Favorites(ctx context.Context, cred *Cred) ([]*Comic, error)
 	Search(ctx context.Context, cred *Cred, keyword string, page, pageSize int, sort string) (*SearchResult, error)
 	Detail(ctx context.Context, cred *Cred, comicID string) (*Comic, error)

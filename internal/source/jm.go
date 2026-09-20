@@ -28,6 +28,8 @@ type JM struct {
 	apiDomain     string
 	imageDomain   string
 	scrambleCache map[string]int
+	chapCache     map[string]jmChapEntry // comicID -> 章节表（阅读器按 order 找 photoID）
+	imgCache      map[string]jmImgEntry  // photoID -> 图片文件名表
 
 	api *http.Client // API 请求（带超时）
 	img *http.Client // 图片下载（大文件，不设整体超时）
@@ -43,6 +45,8 @@ func NewJM(proxy string, imageWorkers int) *JM {
 		apiDomain:     jmAPIDomains[0],
 		imageDomain:   jmImageDomains[0],
 		scrambleCache: map[string]int{},
+		chapCache:     map[string]jmChapEntry{},
+		imgCache:      map[string]jmImgEntry{},
 		api:           newHTTPClient(proxy, 45*time.Second),
 		img:           newHTTPClient(proxy, 0),
 	}
@@ -665,6 +669,121 @@ func (j *JM) fetchCoverBytes(ctx context.Context, comicID, image string) ([]byte
 		return nil, "", errors.New("封面不是图片")
 	}
 	return b, orDefault(resp.Header.Get("Content-Type"), "image/jpeg"), nil
+}
+
+// ------------------------------ 在线阅读 ------------------------------
+
+type jmChapEntry struct {
+	at       time.Time
+	chapters []Chapter
+}
+
+type jmImgEntry struct {
+	at    time.Time
+	names []string
+}
+
+// resolveChapter 按章节序号找章节（含 photoID），10 分钟缓存避免反复拉详情
+func (j *JM) resolveChapter(ctx context.Context, cred *Cred, comicID string, order int) (Chapter, error) {
+	j.mu.Lock()
+	if e, ok := j.chapCache[comicID]; ok && time.Since(e.at) < 10*time.Minute {
+		for _, ch := range e.chapters {
+			if ch.Order == order {
+				j.mu.Unlock()
+				return ch, nil
+			}
+		}
+	}
+	j.mu.Unlock()
+
+	c, err := j.Detail(ctx, cred, comicID)
+	if err != nil {
+		return Chapter{}, err
+	}
+	j.mu.Lock()
+	j.chapCache[comicID] = jmChapEntry{at: time.Now(), chapters: c.Chapters}
+	j.mu.Unlock()
+	for _, ch := range c.Chapters {
+		if ch.Order == order {
+			return ch, nil
+		}
+	}
+	return Chapter{}, fmt.Errorf("章节 %d 不存在", order)
+}
+
+func (j *JM) chapterImagesCached(ctx context.Context, cred *Cred, photoID string) ([]string, error) {
+	j.mu.Lock()
+	if e, ok := j.imgCache[photoID]; ok && time.Since(e.at) < 10*time.Minute {
+		j.mu.Unlock()
+		return e.names, nil
+	}
+	j.mu.Unlock()
+	names, err := j.chapterImages(ctx, cred, photoID)
+	if err != nil {
+		return nil, err
+	}
+	j.mu.Lock()
+	j.imgCache[photoID] = jmImgEntry{at: time.Now(), names: names}
+	j.mu.Unlock()
+	return names, nil
+}
+
+// Pages 在线阅读：某章页数与章节名
+func (j *JM) Pages(ctx context.Context, cred *Cred, comicID string, order int) (int, string, error) {
+	ch, err := j.resolveChapter(ctx, cred, comicID, order)
+	if err != nil {
+		return 0, "", err
+	}
+	names, err := j.chapterImagesCached(ctx, cred, ch.ID)
+	if err != nil {
+		return 0, "", err
+	}
+	return len(names), ch.Title, nil
+}
+
+// PageImage 在线阅读：某章第 page 页图片（乱序在这里还原，直接可看）
+func (j *JM) PageImage(ctx context.Context, cred *Cred, comicID string, order, page int, preview bool) ([]byte, string, error) {
+	ch, err := j.resolveChapter(ctx, cred, comicID, order)
+	if err != nil {
+		return nil, "", err
+	}
+	names, err := j.chapterImagesCached(ctx, cred, ch.ID)
+	if err != nil {
+		return nil, "", err
+	}
+	if page < 1 || page > len(names) {
+		return nil, "", fmt.Errorf("页码 %d 超出范围（本章共 %d 页）", page, len(names))
+	}
+	name := names[page-1]
+	raw, err := j.fetchImage(ctx, ch.ID, name)
+	if err != nil {
+		return nil, "", err
+	}
+	num := jmSegNum(j.scrambleID(ctx, cred, ch.ID), jmAid(ch.ID), name)
+	if num <= 0 {
+		return raw, jmImageContentType(name), nil
+	}
+	mode := "lossless"
+	if preview {
+		mode = "jpeg" // 在线阅读：小图快传
+	}
+	data, ext, err := jmEncodePage(raw, num, mode)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, jmImageContentType("x." + ext), nil
+}
+
+func jmImageContentType(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	}
+	return "image/webp"
 }
 
 // ------------------------------ 下载 ------------------------------
