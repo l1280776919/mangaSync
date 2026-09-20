@@ -1,0 +1,12 @@
+# 构建产物
+/mangasync
+!web/dist
+# 依赖与缓存
+web/node_modules/
+engines/__pycache__/
+__pycache__/
+*.pyc
+# 本地运行数据
+/srv/
+*.log
+.DS_Store

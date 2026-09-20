@@ -1,0 +1,86 @@
+# mangaSync
+
+漫画收藏同步系统：把**哔咔漫画(PicaComic)**和**禁漫(18comic/JMComic)**账号里的「我的收藏」增量同步下载到本地 NAS，
+并提供账号管理、收藏管理、官方搜索、下载队列、漫画库浏览和定时同步。
+
+- 后端：Go 1.27（单文件二进制，内置 SQLite 存账号/任务/库，内嵌前端静态资源）
+- 前端：Vue 3 + Vite + Element Plus（暗色主题，中后台风格）
+- 部署形态：**前后端不分离** —— 前端 `npm run build` 的产物被 `go:embed` 进后端，
+  运行时只需要一个 `mangasync` 二进制 + 一个端口
+
+## 功能
+
+| 模块 | 能力 |
+| --- | --- |
+| 账号管理 | 新增/编辑/删除账号（哔咔、禁漫），测试登录、显示昵称/等级/收藏数、登录态失效自动重登 |
+| 收藏管理 | 分页浏览收藏（封面/标题/作者/分类/章节数/已下载状态），关键词过滤，加入收藏、取消收藏，一键「整本下载」，一键「同步该账号收藏」 |
+| 官方搜索 | 哔咔 `comics/advanced-search`、禁漫 `/search`，支持排序、分页，结果可直接下载或加收藏 |
+| 下载队列 | 并发调度（可配 1–8）、章节级/图片级进度、速度、当前章节、失败重试、取消、日志查看（SSE 实时推送） |
+| 漫画库 | 扫描两个下载目录生成索引（标题/章节/图片数/体积/路径），按源筛选、排序、删除（可选删文件）、重新扫描 |
+| 设置 | 下载根目录与各源子目录、代理、并发、图片质量（原图/高清/普通）、禁漫 venv/桥接路径、每日定时同步时间 |
+| 统计 | 账号/收藏/任务状态/库体积/磁盘剩余 |
+
+## 架构
+
+```
+main.go                    启动、内嵌前端、每日定时同步
+internal/config            设置（/var/lib/mangasync/config.json）
+internal/store             SQLite（modernc.org/sqlite，纯 Go 无 CGO）
+internal/source            漫画源抽象
+   ├─ pica.go              哔咔：原生 Go 实现（签名、收藏、搜索、详情、章节图片、下载）
+   └─ jm.go                禁漫：调用 engines/jm_bridge.py（复用 jmcomic 库处理接口加解密/图片乱序解码）
+internal/engine            任务队列、并发调度、进度事件（SSE）、收藏同步、目录扫描
+internal/api               REST API + 内嵌前端（web/dist）
+engines/jm_bridge.py       禁漫 JSON 桥接脚本（stdout 只输出 JSON）
+web/                       Vue 3 前端源码（构建产物进 web/dist）
+docs/API.md                接口契约
+```
+
+两个源的关键差异：
+
+| | 哔咔 PicaComic | 禁漫 18comic |
+| --- | --- | --- |
+| 接口 | `https://picaapi.picacomic.com/`，HMAC-SHA256 签名 | 移动端 API（域名自动更新） |
+| 网络 | 域名被 DNS 污染，**必须走代理** | **直连即可**（图片 CDN 也直连） |
+| 登录 | 账号名（不是邮箱）+ 密码 | 账号 + 密码，登录态是 cookies |
+| 图片 | `{fileServer}/static/{path}`，`image-quality: original` 拿原图 | `cdn-msp*.jmapiproxy*.cc/media/photos/...`，官方 App 同款 webp 原图 |
+| 收藏增删 | `POST comics/{id}/favourite`（toggle，英式拼写） | `/favorite` toggle |
+| 目录结构 | `<标题>/<001 - 章节名>/001.jpg` | `<id> <标题>/[<序号> <章节名>/]00001.webp` |
+
+## 构建与运行
+
+```bash
+# 1. 前端（需要 node 18+）
+cd web && npm install && npm run build && cd ..
+
+# 2. 后端（Go 1.22+，会内嵌 web/dist）
+go build -o mangasync .
+
+# 3. 运行
+./mangasync                 # 默认 :8787，数据目录 /var/lib/mangasync
+./mangasync -addr :9000     # 自定义端口
+```
+
+一键：`scripts/build.sh`（构建前后端并输出 ./mangasync）。
+
+systemd（可选）：
+
+```bash
+cp deploy/mangasync.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now mangasync
+```
+
+打开 `http://<NAS>:8787`，先在「账号」页添加哔咔/禁漫账号（登录成功才会保存），
+然后「漫画库 → 重新扫描」把已有漫画索引进来，之后在「收藏」页点「同步账号收藏」即可增量下载。
+
+## 与已有脚本的关系
+
+NAS 上原有的两个脚本（`独立脚本目录` 与 `python3 环境（装了 jmcomic）`）与本系统使用**相同的下载目录和目录命名**，
+因此历史下载会被「重新扫描」直接识别，不会重复下载。系统的下载逻辑也保持同样的约定：
+章节先写隐藏临时目录 `.xxx.part`，图片张数校验通过才改名；已完整章节跳过。
+
+## 说明
+
+- 后端默认监听所有网卡的 8787 端口，**没有任何鉴权**，只适合内网/自用；如需公网暴露请自行加反代鉴权。
+- 禁漫功能依赖 `hect0x7/JMComic-Crawler-Python`（`pip install jmcomic`），路径可在设置里改。
+- 图片来源与账号凭据仅保存在本机（config.json 权限 600、SQLite 本地文件）。

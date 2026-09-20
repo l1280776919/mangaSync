@@ -1,0 +1,16 @@
+[Unit]
+Description=mangaSync 漫画收藏同步系统
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/mangasync
+ExecStart=/opt/mangasync/mangasync -addr :8787
+Restart=on-failure
+RestartSec=5
+# 代理：哔咔域名被污染，需要 mihomo（系统设置里也能配代理）
+Environment=HOME=/root
+
+[Install]
+WantedBy=multi-user.target
