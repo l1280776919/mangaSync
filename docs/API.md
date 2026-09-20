@@ -31,10 +31,11 @@
 ```
 
 `PUT /api/settings`：body 为上面对象的部分字段，返回合并后的完整设置。
-- `authUser` / `authPass`：访问认证账号密码。`authUser` 置空 = 关闭认证；`authPass` 传空串 = 保持原密码不变；
-  GET 返回的 `authPass` 恒为 `********`（不回显明文）。
-- 认证方式：`?token=<密码>`（种 cookie 后 302 跳转到干净地址）、Cookie `ms_auth`、HTTP Basic；`/api/health` 始终放行。
 - 所有文本响应默认 gzip（`Vary: Accept-Encoding`），`/api/events` 除外。
+- **认证**：本文件列出的所有接口都需要登录会话（Cookie `ms_session`），否则 401。
+  认证接口见 `docs/AUTH.md`：`POST /api/auth/login`、`POST /api/auth/logout`、
+  `GET /api/auth/me`、`POST /api/auth/password`；仅 `/api/health` 免认证。
+  首次初始化账号 `admin` / `admin999`，未改密前除认证接口外一律 403。
 （校验：`downloadRoot` 必须存在或是可创建目录；`concurrency` 1..8；`quality` ∈ original|medium|low（只有 pica 用得上））
 
 ## 账号

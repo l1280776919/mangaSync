@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/l1280776919/mangaSync/internal/api"
+	"github.com/l1280776919/mangaSync/internal/auth"
 	"github.com/l1280776919/mangaSync/internal/config"
 	"github.com/l1280776919/mangaSync/internal/engine"
 	"github.com/l1280776919/mangaSync/internal/store"
@@ -23,6 +24,12 @@ import (
 
 //go:embed all:web/dist
 var webFS embed.FS
+
+// 首次初始化用的默认管理员（登录后会强制改密）
+const (
+	DefaultAdminUser     = "admin"
+	DefaultAdminPassword = "admin999"
+)
 
 // gzipMiddleware 对文本类响应做 gzip 压缩（前端 element-plus 打包后 1MB，压缩后 ~340KB，
 // 公网/穿透访问时差别很大；SSE 与二进制流不压缩）
@@ -113,6 +120,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("打开数据库失败: %v", err)
 	}
+	// 首次初始化：没有任何后台账号时创建默认管理员 admin/admin999，并强制首次登录改密
+	if n, err := st.CountUsers(); err == nil && n == 0 {
+		hash, salt, iter, herr := auth.HashPassword(DefaultAdminPassword)
+		if herr != nil {
+			log.Fatalf("生成默认密码失败: %v", herr)
+		}
+		if _, cerr := st.CreateUser(DefaultAdminUser, hash, salt, iter, true, true); cerr != nil {
+			log.Fatalf("创建默认管理员失败: %v", cerr)
+		}
+		log.Printf("首次初始化：已创建管理员 %s / %s（首次登录必须修改密码）", DefaultAdminUser, DefaultAdminPassword)
+	}
+	_ = st.CleanupSessions()
 	eng := engine.New(st, cfg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -145,7 +164,7 @@ func main() {
 	}
 	httpSrv := &http.Server{
 		Addr:              listen,
-		Handler:           logRequests(gzipMiddleware(api.BasicAuth(cfg, mux))),
+		Handler:           logRequests(gzipMiddleware(srv.SessionAuth(mux))),
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 	go func() {

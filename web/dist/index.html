@@ -5,12 +5,33 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
     <title>mangaSync · 漫画同步</title>
-    <script type="module" crossorigin src="./assets/index-hW9rkvly.js"></script>
-    <link rel="modulepreload" crossorigin href="./assets/vue-DeyooggK.js">
-    <link rel="modulepreload" crossorigin href="./assets/element-DYMQahEk.js">
-    <link rel="stylesheet" crossorigin href="./assets/index-BbG9FCND.css">
+    <style>
+      /* 首屏占位：穿透/公网带宽小，加载较慢时不要白屏 */
+      html, body { margin: 0; background: #141414; color: #c8c8c8; }
+      #loading {
+        height: 100vh; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 14px;
+        font: 14px/1.6 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      #loading .dot {
+        width: 26px; height: 26px; border: 2px solid #4a4a4a;
+        border-top-color: #79bbff; border-radius: 50%; animation: spin 0.9s linear infinite;
+      }
+      #loading .tip { color: #7a7a7a; font-size: 12px; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+    <script type="module" crossorigin src="./assets/index-0593jZY2.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/vue-_-JdQxGd.js">
+    <link rel="modulepreload" crossorigin href="./assets/element-1-4nLNcq.js">
+    <link rel="stylesheet" crossorigin href="./assets/index-Dr3KCwie.css">
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div id="loading">
+        <div class="dot"></div>
+        <div>mangaSync 正在加载…</div>
+        <div class="tip">首次打开需要下载前端资源，网络较慢时请稍等；长时间无反应请刷新一次</div>
+      </div>
+    </div>
   </body>
 </html>

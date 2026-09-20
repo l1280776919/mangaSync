@@ -118,6 +118,16 @@ func (s *Store) migrate() error {
 			images integer default 0, bytes integer default 0,
 			complete integer default 0, updated_at text default '', source text default 'download')`,
 		`create unique index if not exists idx_comics on comics(kind, comic_id)`,
+		`create table if not exists users(
+			id integer primary key autoincrement,
+			username text not null unique,
+			pass_hash text not null, salt text not null, iterations integer not null default 200000,
+			is_admin integer default 1, must_change_password integer default 0,
+			created_at text default '', last_login_at text default '', password_changed_at text default '')`,
+		`create table if not exists sessions(
+			token text primary key, user_id integer not null,
+			created_at text default '', expires_at text default '', user_agent text default '')`,
+		`create index if not exists idx_sessions_user on sessions(user_id)`,
 	}
 	for _, q := range stmts {
 		if _, err := s.db.Exec(q); err != nil {

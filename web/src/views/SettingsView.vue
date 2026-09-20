@@ -1,10 +1,12 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import api from '@/api'
+import api, { authErrorMessage } from '@/api'
 import { useAppStore } from '@/store/app'
+import { auth } from '@/store/auth'
+import { changePassword, logout } from '@/composables/useAuth'
 import StatCard from '@/components/StatCard.vue'
-import { QUALITY_OPTIONS, formatBytes } from '@/utils/format'
+import { QUALITY_OPTIONS, formatBytes, formatTime } from '@/utils/format'
 
 const store = useAppStore()
 
@@ -26,9 +28,7 @@ const form = reactive({
   imageWorkers: 8,
   quality: 'original',
   schedule: { enabled: false, time: '04:30' },
-  serverPort: 8787,
-  authUser: '',
-  authPass: ''
+  serverPort: 8787
 })
 
 const rules = {
@@ -66,6 +66,91 @@ const rules = {
   ]
 }
 
+/* ---------------- 账号安全（登录态 + 改密 + 登出） ---------------- */
+
+const account = computed(() => auth.user || null)
+const accountName = computed(() => auth.user?.username || '—')
+const lastLoginAt = computed(() => formatTime(auth.user?.lastLoginAt))
+const sessionExpiresAt = computed(() => formatTime(auth.user?.sessionExpiresAt))
+
+const pwFormRef = ref(null)
+const pwSaving = ref(false)
+const loggingOut = ref(false)
+
+const pwForm = reactive({
+  oldPassword: '',
+  newPassword: '',
+  confirmPassword: ''
+})
+
+const pwRules = {
+  oldPassword: [{ required: true, message: '请输入原密码', trigger: 'blur' }],
+  newPassword: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    { min: 6, message: '新密码至少 6 位', trigger: 'blur' },
+    {
+      validator(rule, value, cb) {
+        if (value && value === pwForm.oldPassword) cb(new Error('新密码不能与原密码相同'))
+        else cb()
+      },
+      trigger: 'blur'
+    }
+  ],
+  confirmPassword: [
+    { required: true, message: '请再次输入新密码', trigger: 'blur' },
+    {
+      validator(rule, value, cb) {
+        if (value !== pwForm.newPassword) cb(new Error('两次输入的密码不一致'))
+        else cb()
+      },
+      trigger: ['blur', 'change']
+    }
+  ]
+}
+
+async function loadAccount() {
+  try {
+    // 让「最近登录时间 / 会话有效期」保持最新
+    const me = await api.me()
+    auth.user = { ...(auth.user || {}), ...me }
+    auth.loaded = true
+  } catch (e) {
+    /* api.js 已统一处理 401 */
+  }
+}
+
+async function submitPassword() {
+  if (pwSaving.value || !pwFormRef.value) return
+  await pwFormRef.value.validate(async (valid) => {
+    if (!valid) return
+    pwSaving.value = true
+    try {
+      await changePassword({
+        oldPassword: pwForm.oldPassword,
+        newPassword: pwForm.newPassword,
+        silent: true
+      })
+      ElMessage.success('密码已修改，请牢记新密码')
+      pwForm.oldPassword = pwForm.newPassword = pwForm.confirmPassword = ''
+      pwFormRef.value.clearValidate()
+    } catch (e) {
+      ElMessage.error(authErrorMessage(e))
+    } finally {
+      pwSaving.value = false
+    }
+  })
+}
+
+async function onLogout() {
+  if (loggingOut.value) return
+  loggingOut.value = true
+  try {
+    await logout()
+  } finally {
+    loggingOut.value = false
+  }
+}
+
 async function load() {
   loading.value = true
   try {
@@ -85,9 +170,7 @@ async function load() {
         enabled: !!s?.schedule?.enabled,
         time: s?.schedule?.time || '04:30'
       },
-      serverPort: s?.serverPort ?? 8787,
-      authUser: s?.authUser ?? '',
-      authPass: '' // 后端不回显密码，留空表示不修改
+      serverPort: s?.serverPort ?? 8787
     })
     store.settings = s
   } catch (e) {
@@ -123,15 +206,12 @@ async function save() {
         imageWorkers: Number(form.imageWorkers),
         quality: form.quality,
         schedule: { enabled: !!form.schedule.enabled, time: form.schedule.time },
-        serverPort: Number(form.serverPort),
-        authUser: form.authUser,
-        authPass: form.authPass
+        serverPort: Number(form.serverPort)
       }
       const merged = await api.saveSettings(payload)
       store.settings = merged
       Object.assign(form, {
         ...merged,
-        authPass: '', // 密码不回显，下一次留空即不修改
         schedule: { ...(merged?.schedule || form.schedule) }
       })
       ElMessage.success('设置已保存')
@@ -149,11 +229,101 @@ function reset() {
 }
 
 onMounted(async () => {
-  await Promise.allSettled([load(), loadHealth(), store.loadStats()])
+  await Promise.allSettled([load(), loadHealth(), loadAccount(), store.loadStats()])
 })
 </script>
 
 <template>
+  <!-- 账号安全：登录态 + 内嵌改密 + 登出（旧的 authUser/authPass「访问控制」已随 Basic 认证一并移除） -->
+  <div class="ms-panel">
+    <div class="ms-panel-title">
+      <span>
+        账号安全
+        <span class="ms-sub">· /api/auth/me · /api/auth/password · /api/auth/logout</span>
+      </span>
+      <div class="head-actions">
+        <el-tag size="small" effect="dark" type="info">{{ accountName }}</el-tag>
+        <el-tag v-if="account?.isAdmin" size="small" effect="dark" type="warning">管理员</el-tag>
+        <el-button size="small" :loading="loggingOut" @click="onLogout">退出登录</el-button>
+      </div>
+    </div>
+
+    <el-alert
+      v-if="account?.mustChangePassword"
+      title="当前仍是初始密码，请先修改密码后再使用其它功能。"
+      type="warning"
+      :closable="false"
+      show-icon
+      class="pw-warn"
+    />
+
+    <div class="account-grid">
+      <div class="account-item">
+        <div class="label ms-dim">当前账号</div>
+        <div class="value">{{ accountName }}</div>
+      </div>
+      <div class="account-item">
+        <div class="label ms-dim">最近登录时间</div>
+        <div class="value">{{ lastLoginAt }}</div>
+      </div>
+      <div class="account-item">
+        <div class="label ms-dim">会话有效期至</div>
+        <div class="value">{{ sessionExpiresAt }}</div>
+      </div>
+    </div>
+
+    <el-divider content-position="left">修改密码</el-divider>
+
+    <el-form
+      ref="pwFormRef"
+      :model="pwForm"
+      :rules="pwRules"
+      label-width="132px"
+      label-position="right"
+      class="setting-form"
+      @submit.prevent="submitPassword"
+    >
+      <el-form-item label="原密码" prop="oldPassword">
+        <el-input
+          v-model="pwForm.oldPassword"
+          type="password"
+          show-password
+          autocomplete="current-password"
+          placeholder="请输入当前密码"
+          @keyup.enter="submitPassword"
+        />
+      </el-form-item>
+
+      <el-form-item label="新密码" prop="newPassword">
+        <el-input
+          v-model="pwForm.newPassword"
+          type="password"
+          show-password
+          autocomplete="new-password"
+          placeholder="至少 6 位，且不能与原密码相同"
+          @keyup.enter="submitPassword"
+        />
+        <div class="tip">改密后当前会话保留，其它已登录设备会被踢下线。</div>
+      </el-form-item>
+
+      <el-form-item label="确认新密码" prop="confirmPassword">
+        <el-input
+          v-model="pwForm.confirmPassword"
+          type="password"
+          show-password
+          autocomplete="new-password"
+          placeholder="请再次输入新密码"
+          @keyup.enter="submitPassword"
+        />
+      </el-form-item>
+
+      <el-form-item>
+        <el-button type="primary" :loading="pwSaving" @click="submitPassword">修改密码</el-button>
+        <el-button @click="onLogout">退出登录</el-button>
+      </el-form-item>
+    </el-form>
+  </div>
+
   <div class="ms-panel">
     <div class="ms-panel-title">
       <span>
@@ -236,24 +406,6 @@ onMounted(async () => {
         <el-input v-model="form.jmBridge" placeholder="engines/jm_bridge.py" clearable />
       </el-form-item>
 
-      <el-divider content-position="left">访问控制</el-divider>
-
-      <el-form-item label="访问账号">
-        <el-input v-model="form.authUser" placeholder="留空=不启用认证" clearable />
-        <div class="tip">填了账号后，所有访问（含公网反代）都需要 HTTP Basic 认证；/api/health 除外。</div>
-      </el-form-item>
-
-      <el-form-item label="访问密码">
-        <el-input
-          v-model="form.authPass"
-          type="password"
-          show-password
-          :placeholder="form.authUser ? '留空=保持原密码不变' : '设置访问密码'"
-          clearable
-        />
-        <div class="tip">密码不会回显。清空「访问账号」即可关闭认证。</div>
-      </el-form-item>
-
       <el-divider content-position="left">定时同步</el-divider>
 
       <el-form-item label="启用定时同步">
@@ -334,6 +486,34 @@ onMounted(async () => {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.pw-warn {
+  margin-bottom: 12px;
+}
+
+.account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.account-item {
+  background: var(--ms-bg-soft);
+  border: 1px solid var(--ms-border);
+  border-radius: var(--ms-radius);
+  padding: 10px 12px;
+}
+
+.account-item .label {
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.account-item .value {
+  font-size: 14px;
+  font-weight: 600;
+  word-break: break-all;
 }
 
 :deep(.el-form-item__content) {

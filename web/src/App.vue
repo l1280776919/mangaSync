@@ -2,6 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/store/app'
+import { auth } from '@/store/auth'
+import { logout } from '@/composables/useAuth'
 
 const route = useRoute()
 const router = useRouter()
@@ -9,6 +11,12 @@ const store = useAppStore()
 
 const isMobile = ref(false)
 const drawerOpen = ref(false)
+const loggingOut = ref(false)
+
+/** 登录 / 首改密码页是独立整屏页，不套侧边栏外壳 */
+const AUTH_PAGES = ['/login', '/change-password']
+const isAuthPage = computed(() => AUTH_PAGES.includes(route.path))
+const username = computed(() => auth.user?.username || '未登录')
 
 // 导航顺序显式声明（router.getRoutes() 的顺序不可靠）
 const MENU = [
@@ -45,19 +53,40 @@ function go(path) {
   drawerOpen.value = false
 }
 
+async function onLogout() {
+  if (loggingOut.value) return
+  loggingOut.value = true
+  drawerOpen.value = false
+  try {
+    await logout()
+  } finally {
+    loggingOut.value = false
+  }
+}
+
+/** 业务页才需要账号 / 统计 / SSE；登录页不需要（省掉一堆 401 请求） */
+function bootstrap() {
+  store.startEvents()
+  store.loadAccounts().catch(() => {})
+  store.loadStats().catch(() => {})
+}
+
 watch(
   () => route.path,
-  () => {
+  (path) => {
     drawerOpen.value = false
+    if (AUTH_PAGES.includes(path)) {
+      store.stopEvents()
+    } else {
+      bootstrap()
+    }
   }
 )
 
 onMounted(async () => {
   syncViewport()
   window.addEventListener('resize', syncViewport)
-  store.startEvents()
-  store.loadAccounts().catch(() => {})
-  store.loadStats().catch(() => {})
+  if (!isAuthPage.value) bootstrap()
 })
 
 onUnmounted(() => {
@@ -66,7 +95,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <el-container class="app-shell">
+  <!-- 登录页 / 强制改密页：整屏独立卡片，不套管理后台外壳 -->
+  <router-view v-if="isAuthPage" />
+
+  <el-container v-else class="app-shell">
     <!-- 桌面端侧边导航 -->
     <el-aside v-if="!isMobile" width="196px" class="app-aside">
       <div class="brand">
@@ -84,9 +116,24 @@ onUnmounted(() => {
           />
         </el-menu-item>
       </el-menu>
-      <div class="aside-foot ms-dim">
-        <div>v0.1.0</div>
-        <a :href="'#/settings'">设置</a>
+      <div class="aside-foot">
+        <div class="foot-row">
+          <el-icon class="foot-icon"><UserFilled /></el-icon>
+          <span class="foot-user ms-ellipsis" :title="username">{{ username }}</span>
+          <span class="ms-dim foot-ver">v0.1.0</span>
+        </div>
+        <div class="foot-row">
+          <a href="#/settings">设置</a>
+          <el-button
+            link
+            type="primary"
+            size="small"
+            :loading="loggingOut"
+            @click="onLogout"
+          >
+            退出登录
+          </el-button>
+        </div>
       </div>
     </el-aside>
 
@@ -113,6 +160,25 @@ onUnmounted(() => {
           />
         </el-menu-item>
       </el-menu>
+      <div class="aside-foot">
+        <div class="foot-row">
+          <el-icon class="foot-icon"><UserFilled /></el-icon>
+          <span class="foot-user ms-ellipsis" :title="username">{{ username }}</span>
+          <span class="ms-dim foot-ver">v0.1.0</span>
+        </div>
+        <div class="foot-row">
+          <a href="#/settings">设置</a>
+          <el-button
+            link
+            type="primary"
+            size="small"
+            :loading="loggingOut"
+            @click="onLogout"
+          >
+            退出登录
+          </el-button>
+        </div>
+      </div>
     </el-drawer>
 
     <el-container class="app-main-wrap">
@@ -201,11 +267,37 @@ onUnmounted(() => {
 }
 
 .aside-foot {
-  padding: 12px 18px;
+  padding: 10px 16px 12px;
   font-size: 12px;
-  display: flex;
-  justify-content: space-between;
   border-top: 1px solid var(--ms-border);
+}
+
+.foot-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.foot-row + .foot-row {
+  justify-content: space-between;
+  margin-top: 2px;
+}
+
+.foot-icon {
+  color: var(--ms-text-dim);
+  flex-shrink: 0;
+}
+
+.foot-user {
+  flex: 1;
+  min-width: 0;
+  color: var(--ms-text);
+  font-weight: 600;
+}
+
+.foot-ver {
+  flex-shrink: 0;
 }
 
 .app-main-wrap {

@@ -55,11 +55,6 @@ type Settings struct {
 
 	Schedule   Schedule `json:"schedule"`
 	ServerPort int      `json:"serverPort"`
-
-	// 访问认证：authUser 非空时，所有请求（/api/health 除外）都需要 HTTP Basic 认证
-	// 适用于把服务通过 frp/反代暴露到公网；authPass 留空表示不修改现有密码
-	AuthUser string `json:"authUser"`
-	AuthPass string `json:"authPass"`
 }
 
 type Manager struct {
@@ -144,10 +139,6 @@ func mergeSettings(dst *Settings, src Settings) {
 	dst.Schedule = src.Schedule
 	if src.ServerPort > 0 {
 		dst.ServerPort = src.ServerPort
-	}
-	dst.AuthUser = src.AuthUser
-	if src.AuthPass != "" {
-		dst.AuthPass = src.AuthPass
 	}
 }
 
