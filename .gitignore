@@ -7,6 +7,5 @@ engines/__pycache__/
 __pycache__/
 *.pyc
 # 本地运行数据
-/srv/
 *.log
 .DS_Store

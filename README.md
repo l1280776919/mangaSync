@@ -24,7 +24,7 @@
 
 ```
 main.go                    启动、内嵌前端、每日定时同步
-internal/config            设置（/var/lib/mangasync/config.json）
+internal/config            设置（$MANGASYNC_HOME/config.json，默认 /var/lib/mangasync）
 internal/store             SQLite（modernc.org/sqlite，纯 Go 无 CGO）
 internal/source            漫画源抽象
    ├─ pica.go              哔咔：原生 Go 实现（签名、收藏、搜索、详情、章节图片、下载）
@@ -41,7 +41,7 @@ docs/API.md                接口契约
 | | 哔咔 PicaComic | 禁漫 18comic |
 | --- | --- | --- |
 | 接口 | `https://picaapi.picacomic.com/`，HMAC-SHA256 签名 | 移动端 API（域名自动更新） |
-| 网络 | 域名被 DNS 污染，**必须走代理** | **直连即可**（图片 CDN 也直连） |
+| 网络 | 国内多数网络下域名被污染，**通常需要代理** | **直连即可**（图片 CDN 也直连） |
 | 登录 | 账号名（不是邮箱）+ 密码 | 账号 + 密码，登录态是 cookies |
 | 图片 | `{fileServer}/static/{path}`，`image-quality: original` 拿原图 | `cdn-msp*.jmapiproxy*.cc/media/photos/...`，官方 App 同款 webp 原图 |
 | 收藏增删 | `POST comics/{id}/favourite`（toggle，英式拼写） | `/favorite` toggle |
@@ -57,7 +57,8 @@ cd web && npm install && npm run build && cd ..
 go build -o mangasync .
 
 # 3. 运行
-./mangasync                 # 默认 :8787，数据目录 /var/lib/mangasync
+./mangasync                 # 默认 :8787，数据目录 $MANGASYNC_HOME（默认 /var/lib/mangasync）
+./mangasync -data /srv/mangasync -addr :9000   # 也可以用参数指定
 ./mangasync -addr :9000     # 自定义端口
 ```
 
@@ -73,11 +74,12 @@ systemctl daemon-reload && systemctl enable --now mangasync
 打开 `http://<NAS>:8787`，先在「账号」页添加哔咔/禁漫账号（登录成功才会保存），
 然后「漫画库 → 重新扫描」把已有漫画索引进来，之后在「收藏」页点「同步账号收藏」即可增量下载。
 
-## 与已有脚本的关系
+## 与独立下载脚本的兼容性
 
-NAS 上原有的两个脚本（`独立脚本目录` 与 `python3 环境（装了 jmcomic）`）与本系统使用**相同的下载目录和目录命名**，
-因此历史下载会被「重新扫描」直接识别，不会重复下载。系统的下载逻辑也保持同样的约定：
-章节先写隐藏临时目录 `.xxx.part`，图片张数校验通过才改名；已完整章节跳过。
+如果之前用独立脚本下载过漫画，把 `downloadRoot` 指到同一个目录即可：本系统沿用相同的目录命名约定
+（哔咔 `标题/001 - 章节名/001.jpg`、禁漫 `<id> 标题/[序号 章节名/]00001.webp`），
+点一次「漫画库 → 重新扫描」就能把历史下载识别进来，不会重复下载。
+下载逻辑同样保持该约定：章节先写隐藏临时目录 `.xxx.part`，图片张数校验通过才改名；已完整章节自动跳过。
 
 ## 说明
 

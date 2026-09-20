@@ -21,7 +21,7 @@
   "picaProxy": "http://127.0.0.1:7890",
   "jmProxy": "",
   "jmVenv": "python3",
-  "jmBridge": "/opt/mangasync/engines/jm_bridge.py",
+  "jmBridge": "engines/jm_bridge.py",
   "concurrency": 2,
   "imageWorkers": 8,
   "quality": "original",
@@ -88,7 +88,7 @@
   "downloadedChapters":1, "localPath":"...", "cover":"/api/comics/jm/1473052/cover" }
 ```
 
-- `GET /api/comics/{kind}/{comicId}/cover` → 直接返回图片二进制（后端代理下载并缓存到 `/var/lib/mangasync/cache/covers/`，避免前端跨域/被风控）
+- `GET /api/comics/{kind}/{comicId}/cover` → 直接返回图片二进制（后端代理下载并缓存到 `<数据目录>/cache/covers/`，避免前端跨域/被风控）
 
 ## 搜索（官方接口）
 

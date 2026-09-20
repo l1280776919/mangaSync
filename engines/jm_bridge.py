@@ -3,8 +3,8 @@
 """
 禁漫 (18comic / JMComic) JSON 命令行桥接脚本 —— 供 Go 后端调用。
 
-依赖: jmcomic (hect0x7/JMComic-Crawler-Python, 只读复用 python3 环境（装了 jmcomic）/venv) + 标准库。
-本脚本不修改 /srv/@appdata 下任何文件（仅只读读取 config.json 作为 cookie 兜底）。
+依赖: jmcomic (hect0x7/JMComic-Crawler-Python) + 标准库。用装了 jmcomic 的 Python 解释器运行即可，
+或把 JM_VENV_LIB 环境变量指向该解释器所在 venv 的 lib 目录（便于用系统 python 调用）。
 
 协议（除 download 外，stdout 只输出一行 JSON）:
   ping
@@ -24,7 +24,8 @@
   JM_PHOTO_WORKERS  章节并发，默认 2
   JM_CHAPTERS       可选，逗号分隔的章节 order（等同 --chapters）
   JM_FOLDER_ID      收藏夹 ID，默认 0
-  JM_CONFIG         可选，config.json 路径（cookie 兜底），默认 
+  JM_CONFIG         可选，config.json 路径（cookie 兜底；不设则不读任何文件）
+  JM_VENV_LIB       可选，装了 jmcomic 的 venv 的 lib 目录（用系统 python 跑本脚本时用）
   JM_DEBUG=1        输出 jmcomic INFO 日志到 stderr（默认 WARNING）
 
 所有日志一律走 stderr，stdout 只给 JSON。
@@ -41,8 +42,10 @@ from pathlib import Path
 # ----------------------------------------------------------------------------
 # 常量与环境
 # ----------------------------------------------------------------------------
-JM_VENV_LIB = ""
-DEFAULT_CONFIG_PATH = Path(os.environ.get("JM_CONFIG") or "")
+# 可选：指定装了 jmcomic 的 venv 的 lib 目录（用系统 python 跑本脚本时有用）
+JM_VENV_LIB = os.environ.get("JM_VENV_LIB") or ""
+# 可选：cookie 兜底用的 config.json 路径（默认不读任何文件，凭据由调用方通过 JM_COOKIES 传入）
+DEFAULT_CONFIG_PATH = Path(os.environ["JM_CONFIG"]) if os.environ.get("JM_CONFIG") else None
 
 # 固定优先使用的域名（域名列表本身仍保留其它域名做失败重试）
 PREFER_API_DOMAIN = "www.cdnhjk.net"
@@ -84,9 +87,10 @@ def ensure_jmcomic():
     except ImportError:
         pass
     import glob
-    for sp in sorted(glob.glob(os.path.join(JM_VENV_LIB, "python*", "site-packages"))):
-        if os.path.isdir(sp) and sp not in sys.path:
-            sys.path.insert(0, sp)
+    if JM_VENV_LIB:
+        for sp in sorted(glob.glob(os.path.join(JM_VENV_LIB, "python*", "site-packages"))):
+            if os.path.isdir(sp) and sp not in sys.path:
+                sys.path.insert(0, sp)
     import jmcomic  # noqa: F401
 
 
@@ -115,7 +119,9 @@ def setup_logging():
 # 配置 / cookies
 # ----------------------------------------------------------------------------
 def read_config_cookies():
-    """只读读取 NAS 上 config.json 的 cookies（兜底用，绝不打印密码）"""
+    """只读读取 JM_CONFIG 指定的 config.json 里的 cookies（兜底用，绝不打印密码）"""
+    if DEFAULT_CONFIG_PATH is None:
+        return {}
     try:
         data = json.loads(DEFAULT_CONFIG_PATH.read_text("utf-8"))
     except Exception as e:
@@ -206,6 +212,7 @@ def make_client(cookies=None, base_dir=None, rule="Bd/{Aid} {Aname}"):
 
 def api_domain():
     """当前实际会使用的 API 域名（不带协议）"""
+    ensure_jmcomic()
     from jmcomic import JmModuleConfig
     try:
         return pin_domains()

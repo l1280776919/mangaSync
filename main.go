@@ -25,17 +25,18 @@ var webFS embed.FS
 
 func main() {
 	addr := flag.String("addr", "", "监听地址，例如 :8787（默认取设置里的 serverPort）")
+	dataDir := flag.String("data", "", "数据目录（默认取环境变量 MANGASYNC_HOME，再默认 "+config.DefaultDir+"）")
 	noScan := flag.Bool("no-scan", false, "启动时不扫描漫画库")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags)
 	log.SetPrefix("[mangasync] ")
 
-	cfg, err := config.Load()
+	cfg, err := config.Load(*dataDir)
 	if err != nil {
 		log.Fatalf("读取设置失败: %v", err)
 	}
-	st, err := store.Open(config.Dir)
+	st, err := store.Open(cfg.Dir())
 	if err != nil {
 		log.Fatalf("打开数据库失败: %v", err)
 	}
@@ -75,7 +76,7 @@ func main() {
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 	go func() {
-		log.Printf("mangaSync %s 启动，监听 %s，数据目录 %s", api.Version, listen, config.Dir)
+		log.Printf("mangaSync %s 启动，监听 %s，数据目录 %s", api.Version, listen, cfg.Dir())
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("HTTP 服务退出: %v", err)
 		}

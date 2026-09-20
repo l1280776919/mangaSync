@@ -7,8 +7,31 @@ import (
 	"sync"
 )
 
-// Dir 是运行期数据目录（数据库/缓存/日志）
-const Dir = "/var/lib/mangasync"
+// DefaultDir 是运行期数据目录的默认值，可用环境变量 MANGASYNC_HOME 或 -data 参数覆盖
+const DefaultDir = "/var/lib/mangasync"
+
+// DirFromEnv 解析数据目录：MANGASYNC_HOME > 默认值
+func DirFromEnv() string {
+	if v := os.Getenv("MANGASYNC_HOME"); v != "" {
+		return expand(v)
+	}
+	return DefaultDir
+}
+
+// expand 把相对路径转成绝对路径（相对当前工作目录）
+func expand(p string) string {
+	if p == "" {
+		return p
+	}
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	return abs
+}
 
 type Schedule struct {
 	Enabled bool   `json:"enabled"`
@@ -37,18 +60,20 @@ type Settings struct {
 type Manager struct {
 	mu   sync.RWMutex
 	path string
+	dir  string
 	s    Settings
 }
 
+// Default 返回一份通用默认设置（不含任何个人环境路径）
 func Default() Settings {
 	return Settings{
 		DownloadRoot: "/data/comics",
 		PicaDir:      "PicaComic",
 		JmDir:        "18Comic",
-		PicaProxy:    "http://127.0.0.1:7890",
+		PicaProxy:    "",
 		JmProxy:      "",
 		JmVenv:       "python3",
-		JmBridge:     "/opt/mangasync/engines/jm_bridge.py",
+		JmBridge:     "engines/jm_bridge.py",
 		Concurrency:  2,
 		ImageWorkers: 8,
 		Quality:      "original",
@@ -57,11 +82,16 @@ func Default() Settings {
 	}
 }
 
-func Load() (*Manager, error) {
-	if err := os.MkdirAll(Dir, 0o755); err != nil {
+// Load 从 dir 读取（不存在则用默认值），dir 为空时取 DirFromEnv()
+func Load(dir string) (*Manager, error) {
+	if dir == "" {
+		dir = DirFromEnv()
+	}
+	dir = expand(dir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	m := &Manager{path: filepath.Join(Dir, "config.json"), s: Default()}
+	m := &Manager{path: filepath.Join(dir, "config.json"), dir: dir, s: Default()}
 	b, err := os.ReadFile(m.path)
 	if err == nil {
 		var s Settings
@@ -70,9 +100,14 @@ func Load() (*Manager, error) {
 			mergeSettings(&merged, s)
 			m.s = merged
 		}
+	} else {
+		// 首次运行：把默认设置落盘，方便直接改文件
+		_ = m.save()
 	}
 	return m, nil
 }
+
+func (m *Manager) Dir() string { return m.dir }
 
 func mergeSettings(dst *Settings, src Settings) {
 	if src.DownloadRoot != "" {
@@ -113,7 +148,7 @@ func (m *Manager) Get() Settings {
 	return m.s
 }
 
-// Update 用 patch 里的非零字段覆盖，返回合并后的设置
+// Update 用 patch 里的字段覆盖，返回合并后的设置
 func (m *Manager) Update(patch map[string]json.RawMessage) (Settings, error) {
 	m.mu.Lock()
 	s := m.s

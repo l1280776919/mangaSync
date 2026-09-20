@@ -218,12 +218,12 @@ onMounted(async () => {
       <el-divider content-position="left">禁漫运行时（Python）</el-divider>
 
       <el-form-item label="jm venv 路径">
-        <el-input v-model="form.jmVenv" placeholder="python3" clearable />
+        <el-input v-model="form.jmVenv" placeholder="python3（装了 jmcomic 的解释器）" clearable />
         <div class="tip">调用 jmcomic 的 python 解释器路径。</div>
       </el-form-item>
 
       <el-form-item label="jm bridge 脚本">
-        <el-input v-model="form.jmBridge" placeholder="/opt/mangasync/engines/jm_bridge.py" clearable />
+        <el-input v-model="form.jmBridge" placeholder="engines/jm_bridge.py" clearable />
       </el-form-item>
 
       <el-divider content-position="left">定时同步</el-divider>
@@ -277,7 +277,7 @@ onMounted(async () => {
         label="封面缓存"
         value="后端自管"
         icon="Picture"
-        sub="/var/lib/mangasync/cache/covers/"
+        sub="<数据目录>/cache/covers/"
       />
     </div>
   </div>

@@ -25,7 +25,7 @@ type Server struct {
 }
 
 func NewServer(st *store.Store, cfg *config.Manager, eng *engine.Engine) *Server {
-	base := filepath.Join(config.Dir, "cache")
+	base := filepath.Join(cfg.Dir(), "cache")
 	_ = os.MkdirAll(filepath.Join(base, "covers"), 0o755)
 	return &Server{st: st, cfg: cfg, eng: eng, base: base}
 }
