@@ -27,7 +27,7 @@ import KindTag from '@/components/KindTag.vue'
 import PageBar from '@/components/PageBar.vue'
 import StatCard from '@/components/StatCard.vue'
 import { KIND_OPTIONS, formatBytes, formatTime, fromNow } from '@/utils/format'
-import { readerPath } from '@/utils/reader'
+import { readerPath, openReaderWindow } from '@/utils/reader'
 
 const isMobile = useIsMobile()
 const router = useRouter()
@@ -51,8 +51,8 @@ function openDetail(row) {
 
 /** 打开在线阅读器（已下载的章节本地直发） */
 function openReader(row, order = 1) {
-  const path = readerPath(row, order)
-  if (path) router.push(path)
+  // 默认在新窗口打开阅读器
+  openReaderWindow(row, order)
 }
 
 const kind = ref('')

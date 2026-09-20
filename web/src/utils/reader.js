@@ -1,19 +1,21 @@
 /**
- * 在线阅读器的统一跳转路径（收藏页 / 漫画库共用）。
- *
- * 约定：comicId 必须 encodeURIComponent（可能带 / 等特殊字符），
- * kind / order 由 router 的 /reader/:kind/:comicId/:order 解析。
- *
- * @param {{kind?: string, comicId?: string|number}} row 漫画行数据
- * @param {number} order 章节序号
- * @param {string} fallbackKind 行数据没有 kind 时的兜底源（如当前选中账号的 kind）
- * @returns {string|null} 不可用时返回 null（调用方跳过跳转）
+ * 在线阅读器的统一跳转路径与打开逻辑（收藏页 / 漫画库共用）。
  */
 export function readerPath(row, order = 1, fallbackKind = '') {
   const kind = row?.kind || fallbackKind
-  const comicId = row?.comicId
+  const comicId = row?.comicId || row?.id
   if (!kind || !comicId) return null
   return `/reader/${kind}/${encodeURIComponent(comicId)}/${order}`
+}
+
+/**
+ * 默认在新窗口 / 新标签页打开阅读器，不打断用户当前的浏览上下文
+ */
+export function openReaderWindow(row, order = 1, fallbackKind = '') {
+  const path = readerPath(row, order, fallbackKind)
+  if (!path) return
+  const fullUrl = window.location.origin + window.location.pathname + '#' + path
+  window.open(fullUrl, '_blank')
 }
 
 export default readerPath

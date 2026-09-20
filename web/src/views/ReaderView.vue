@@ -76,7 +76,7 @@
             :src="pageUrl(p)"
             :alt="'第 ' + p + ' 页'"
             decoding="async"
-            :loading="p <= 3 ? 'eager' : 'lazy'"
+            :loading="p <= 5 ? 'eager' : 'lazy'"
             :class="{ 'is-loaded': loaded[p] }"
             @load="onLoaded(p, $event)"
             @error="onError(p)"
@@ -202,6 +202,8 @@ async function load() {
   Object.keys(failed).forEach((k) => delete failed[k])
   Object.keys(loaded).forEach((k) => delete loaded[k])
   Object.keys(preloading).forEach((k) => delete preloading[k])
+  preloadQueue = []
+  activePreloadCount = 0
   // 上一章测出来的真实尺寸也要清：否则新章节的占位比例会沿用上一章的数字
   Object.keys(natSize).forEach((k) => delete natSize[k])
   sizes.value = []
@@ -282,25 +284,64 @@ function updateCurrentPage() {
   }
 }
 
-/** 提前把后面几页塞进浏览器缓存（顺带记录真实尺寸，占位更准） */
-function preload(cur) {
-  const my = gen // 记住这批预载属于哪一章
-  for (let i = cur + 1; i <= Math.min(cur + 3, meta.pages); i++) {
-    if (loaded[i] || failed[i] || preloading[i]) continue
-    preloading[i] = true
+/**
+ * 原画画质下的智能分级并发预加载引擎：
+ * - 深度拓展：向前预取 1 页，向后预取 8 页
+ * - 并发控制：最大 2 个后台下载并发，避免拥塞视口正在渲染的当前原画
+ * - 有序调度：按离当前页的距离由近及远有序排队
+ */
+const PRELOAD_AHEAD = 8
+const PRELOAD_BEHIND = 1
+const MAX_PRELOAD_CONCURRENCY = 2
+let activePreloadCount = 0
+let preloadQueue = []
+
+function processPreloadQueue() {
+  const my = gen
+  while (activePreloadCount < MAX_PRELOAD_CONCURRENCY && preloadQueue.length > 0) {
+    const pageNum = preloadQueue.shift()
+    if (loaded[pageNum] || failed[pageNum] || preloading[pageNum]) continue
+    
+    preloading[pageNum] = true
+    activePreloadCount++
+    
     const im = new Image()
     im.onload = () => {
-      if (my !== gen) return // 已经切章：旧图回调作废
-      loaded[i] = true
-      preloading[i] = false // 成功也要复位，否则这张图再也不会被预载
-      if (im.naturalWidth) natSize[i] = [im.naturalWidth, im.naturalHeight]
+      activePreloadCount--
+      if (my === gen) {
+        loaded[pageNum] = true
+        delete preloading[pageNum]
+        if (im.naturalWidth) natSize[pageNum] = [im.naturalWidth, im.naturalHeight]
+      }
+      processPreloadQueue()
     }
     im.onerror = () => {
-      if (my !== gen) return
-      preloading[i] = false
+      activePreloadCount--
+      if (my === gen) {
+        delete preloading[pageNum]
+      }
+      processPreloadQueue()
     }
-    im.src = pageUrl(i)
+    im.src = pageUrl(pageNum)
   }
+}
+
+function preload(cur) {
+  if (!meta.pages) return
+  const needed = []
+  
+  // 1. 向前预取 1 页（方便回翻）
+  for (let i = cur - 1; i >= Math.max(1, cur - PRELOAD_BEHIND); i--) {
+    if (!loaded[i] && !preloading[i] && !failed[i]) needed.push(i)
+  }
+  
+  // 2. 向后预取 8 页（按近到远排序）
+  for (let i = cur + 1; i <= Math.min(cur + PRELOAD_AHEAD, meta.pages); i++) {
+    if (!loaded[i] && !preloading[i] && !failed[i]) needed.push(i)
+  }
+  
+  preloadQueue = needed
+  processPreloadQueue()
 }
 
 function onLoaded(p, e) {

@@ -14,7 +14,7 @@ import ComicDetailDialog from '@/components/ComicDetailDialog.vue'
 import KindTag from '@/components/KindTag.vue'
 import PageBar from '@/components/PageBar.vue'
 import { downloadStateOf, formatBytes, formatTime } from '@/utils/format'
-import { readerPath } from '@/utils/reader'
+import { readerPath, openReaderWindow } from '@/utils/reader'
 
 const store = useAppStore()
 /* 手机端：只保留卡片视图 + 底部批量操作栏 */
@@ -23,9 +23,8 @@ const router = useRouter()
 
 /** 在线阅读：已下载章节走本地文件秒开，未下载的回源并在服务端还原乱序 */
 function read(row, order = 1) {
-  // 行数据缺 kind 时回退到当前账号的源（原来写成未定义的 kind.value，会抛 ReferenceError）
-  const path = readerPath(row, order, currentAccount.value?.kind)
-  if (path) router.push(path)
+  // 默认在新标签页/新窗口打开阅读器
+  openReaderWindow(row, order, currentAccount.value?.kind)
 }
 
 const accountId = ref(null)
