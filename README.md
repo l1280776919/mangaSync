@@ -28,10 +28,10 @@ internal/config            设置（$MANGASYNC_HOME/config.json，默认 /var/li
 internal/store             SQLite（modernc.org/sqlite，纯 Go 无 CGO）
 internal/source            漫画源抽象
    ├─ pica.go              哔咔：原生 Go 实现（签名、收藏、搜索、详情、章节图片、下载）
-   └─ jm.go                禁漫：调用 engines/jm_bridge.py（复用 jmcomic 库处理接口加解密/图片乱序解码）
+   └─ jm.go                禁漫：**原生 Go 实现**（md5 token 签名 + AES-ECB 接口解密 + 图片乱序还原）
+   └─ jm_crypto.go/jm_image.go  禁漫加解密与图片解码（纯标准库 + nativewebp/x-image，无 Python）
 internal/engine            任务队列、并发调度、进度事件（SSE）、收藏同步、目录扫描
 internal/api               REST API + 内嵌前端（web/dist）
-engines/jm_bridge.py       禁漫 JSON 桥接脚本（stdout 只输出 JSON）
 web/                       Vue 3 前端源码（构建产物进 web/dist）
 docs/API.md                接口契约
 ```
@@ -108,5 +108,7 @@ curl -b ck.txt http://<地址>/api/stats
 ## 说明
 
 - 后端默认监听所有网卡的 8787 端口，**没有任何鉴权**，只适合内网/自用；如需公网暴露请自行加反代鉴权。
-- 禁漫功能依赖 `hect0x7/JMComic-Crawler-Python`（`pip install jmcomic`），路径可在设置里改。
+- 禁漫为纯 Go 实现，不需要 Python / jmcomic。
+- **图片画质**：站点下发的原图若带乱序（scramble），会先解码→按行带还原→**无损 WebP 编码**落盘
+  （不引入二次压缩损失；不做乱序的图直接原字节保存）。代价是体积约为站点有损版的 2~3 倍。
 - 图片来源与账号凭据仅保存在本机（config.json 权限 600、SQLite 本地文件）。

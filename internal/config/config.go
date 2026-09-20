@@ -46,9 +46,6 @@ type Settings struct {
 	PicaProxy string `json:"picaProxy"`
 	JmProxy   string `json:"jmProxy"`
 
-	JmVenv   string `json:"jmVenv"`
-	JmBridge string `json:"jmBridge"`
-
 	Concurrency  int    `json:"concurrency"`
 	ImageWorkers int    `json:"imageWorkers"`
 	Quality      string `json:"quality"`
@@ -72,8 +69,6 @@ func Default() Settings {
 		JmDir:        "18Comic",
 		PicaProxy:    "",
 		JmProxy:      "",
-		JmVenv:       "python3",
-		JmBridge:     "engines/jm_bridge.py",
 		Concurrency:  2,
 		ImageWorkers: 8,
 		Quality:      "original",
@@ -121,12 +116,6 @@ func mergeSettings(dst *Settings, src Settings) {
 	}
 	dst.PicaProxy = src.PicaProxy
 	dst.JmProxy = src.JmProxy
-	if src.JmVenv != "" {
-		dst.JmVenv = src.JmVenv
-	}
-	if src.JmBridge != "" {
-		dst.JmBridge = src.JmBridge
-	}
 	if src.Concurrency > 0 {
 		dst.Concurrency = src.Concurrency
 	}

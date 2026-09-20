@@ -20,8 +20,6 @@
   "jmDir": "18Comic",
   "picaProxy": "http://127.0.0.1:7890",
   "jmProxy": "",
-  "jmVenv": "python3",
-  "jmBridge": "engines/jm_bridge.py",
   "concurrency": 2,
   "imageWorkers": 8,
   "quality": "original",

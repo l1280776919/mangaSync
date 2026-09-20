@@ -39,7 +39,7 @@ func (e *Engine) SourceFor(kind string) (source.Source, error) {
 	case "pica":
 		return source.NewPica(s.PicaProxy, s.Quality, s.ImageWorkers), nil
 	case "jm":
-		return source.NewJM(s.JmVenv, s.JmBridge, s.JmProxy, s.ImageWorkers, 2), nil
+		return source.NewJM(s.JmProxy, s.ImageWorkers), nil
 	}
 	return nil, fmt.Errorf("未知的源: %s", kind)
 }

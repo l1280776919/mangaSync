@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"embed"
@@ -8,9 +9,14 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"mime"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -31,27 +37,55 @@ const (
 	DefaultAdminPassword = "admin999"
 )
 
-// gzipMiddleware 对文本类响应做 gzip 压缩（前端 element-plus 打包后 1MB，压缩后 ~340KB，
-// 公网/穿透访问时差别很大；SSE 与二进制流不压缩）
+// gzipMiddleware 只处理 /api/：把响应缓冲后一次性写出并带上 Content-Length，
+// 避免 chunked 在弱网/穿透链路被截断（浏览器对不定长响应截断是直接报错不重试的）。
+// 静态资源由 staticAssets 预压缩处理，SSE 保持流式不压缩。
 func gzipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") || r.URL.Path == "/api/events" {
+		if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/events" ||
+			!strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			next.ServeHTTP(w, r)
 			return
 		}
-		w.Header().Add("Vary", "Accept-Encoding")
-		gw := &gzipWriter{ResponseWriter: w}
-		defer gw.close()
-		next.ServeHTTP(gw, r)
+		buf := &bufferedWriter{header: http.Header{}, status: http.StatusOK}
+		next.ServeHTTP(buf, r)
+
+		body := buf.body.Bytes()
+		h := w.Header()
+		for k, vs := range buf.header {
+			for _, v := range vs {
+				h.Add(k, v)
+			}
+		}
+		h.Add("Vary", "Accept-Encoding")
+		if len(body) >= 512 && compressibleType(buf.header.Get("Content-Type")) {
+			var gz bytes.Buffer
+			zw, _ := gzip.NewWriterLevel(&gz, gzip.BestSpeed)
+			_, _ = zw.Write(body)
+			_ = zw.Close()
+			h.Set("Content-Encoding", "gzip")
+			body = gz.Bytes()
+		}
+		h.Set("Content-Length", strconv.Itoa(len(body)))
+		w.WriteHeader(buf.status)
+		_, _ = w.Write(body)
 	})
 }
 
-type gzipWriter struct {
-	http.ResponseWriter
-	gz          *gzip.Writer
-	wroteHeader bool
-	compress    bool
+// bufferedWriter 先把响应攒在内存里，便于计算 Content-Length
+type bufferedWriter struct {
+	header http.Header
+	body   bytes.Buffer
+	status int
 }
+
+func (b *bufferedWriter) Header() http.Header { return b.header }
+
+func (b *bufferedWriter) WriteHeader(code int) { b.status = code }
+
+func (b *bufferedWriter) Write(p []byte) (int, error) { return b.body.Write(p) }
+
+func (b *bufferedWriter) Flush() {}
 
 func compressibleType(ct string) bool {
 	ct = strings.ToLower(ct)
@@ -63,51 +97,20 @@ func compressibleType(ct string) bool {
 	return false
 }
 
-func (g *gzipWriter) WriteHeader(code int) {
-	if g.wroteHeader {
-		return
-	}
-	g.wroteHeader = true
-	ct := g.Header().Get("Content-Type")
-	if ct != "" && compressibleType(ct) && !strings.Contains(ct, "event-stream") {
-		g.compress = true
-		g.Header().Set("Content-Encoding", "gzip")
-		g.Header().Del("Content-Length")
-		g.gz = gzip.NewWriter(g.ResponseWriter)
-	}
-	g.ResponseWriter.WriteHeader(code)
-}
-
-func (g *gzipWriter) Write(b []byte) (int, error) {
-	if !g.wroteHeader {
-		g.WriteHeader(http.StatusOK)
-	}
-	if g.compress && g.gz != nil {
-		return g.gz.Write(b)
-	}
-	return g.ResponseWriter.Write(b)
-}
-
-func (g *gzipWriter) Flush() {
-	if g.gz != nil {
-		_ = g.gz.Flush()
-	}
-	if f, ok := g.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
-
-func (g *gzipWriter) close() {
-	if g.gz != nil {
-		_ = g.gz.Close()
-	}
-}
-
 func main() {
 	addr := flag.String("addr", "", "监听地址，例如 :8787（默认取设置里的 serverPort）")
 	dataDir := flag.String("data", "", "数据目录（默认取环境变量 MANGASYNC_HOME，再默认 "+config.DefaultDir+"）")
 	noScan := flag.Bool("no-scan", false, "启动时不扫描漫画库")
+	frontendFor := flag.String("frontend-for", "",
+		"前端节点模式：本机只发前端静态资源，并把 /api/* 反代到该地址（例如 http://127.0.0.1:18888）。"+
+			"用于 NAS 上行很弱时把静态资源放到 VPS 就近直发，只让 API 走隧道")
 	flag.Parse()
+
+	// 前端节点：不碰数据库/引擎，纯粹发静态资源 + 反代 API
+	if *frontendFor != "" {
+		runFrontendNode(*addr, *frontendFor)
+		return
+	}
 
 	log.SetFlags(log.LstdFlags)
 	log.SetPrefix("[mangasync] ")
@@ -155,8 +158,9 @@ func main() {
 
 	srv := api.NewServer(st, cfg, eng)
 	mux := http.NewServeMux()
+	assets := newStaticAssets()
 	mux.Handle("/api/", srv.Routes())
-	mux.Handle("/", spaHandler())
+	mux.Handle("/", assets)
 
 	listen := *addr
 	if listen == "" {
@@ -181,34 +185,148 @@ func main() {
 	_ = httpSrv.Shutdown(shutdownCtx)
 }
 
-// spaHandler 托管前端静态文件，找不到的路径回落到 index.html（hash 路由其实用不到，但留着无妨）
-func spaHandler() http.Handler {
+// staticAssets 启动时把前端文本资源预压缩进内存：响应可带 Content-Length（定长），
+// 避免 chunked —— 穿透/弱网链路丢包导致 chunked 截断时，浏览器会直接
+// ERR_INCOMPLETE_CHUNKED_ENCODING 而拿不到资源（element-plus 那个 1MB 的包就中过招）。
+type staticAssets struct {
+	sub   fs.FS
+	gz    map[string][]byte // "/assets/x.js" -> gzip 字节
+	html  []byte            // index.html 兜底（SPA 路由回落）
+	found bool
+}
+
+func newStaticAssets() *staticAssets {
+	sa := &staticAssets{gz: map[string][]byte{}}
 	sub, err := fs.Sub(webFS, "web/dist")
 	if err != nil {
 		log.Printf("前端资源缺失: %v", err)
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "前端资源未构建", 500)
-		})
+		return sa
 	}
-	fileServer := http.FileServer(http.FS(sub))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := strings.TrimPrefix(r.URL.Path, "/")
-		if p == "" {
-			p = "index.html"
+	sa.sub, sa.found = sub, true
+	err = fs.WalkDir(sub, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !compressibleAsset(p) {
+			return err
 		}
-		if _, err := fs.Stat(sub, p); err != nil {
-			// 回落到 index.html
-			b, err := fs.ReadFile(sub, "index.html")
-			if err != nil {
-				http.NotFound(w, r)
-				return
-			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = w.Write(b)
+		b, rerr := fs.ReadFile(sub, p)
+		if rerr != nil || len(b) < 512 {
+			return nil
+		}
+		var buf bytes.Buffer
+		zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+		_, _ = zw.Write(b)
+		_ = zw.Close()
+		sa.gz["/"+p] = buf.Bytes()
+		return nil
+	})
+	if err != nil {
+		log.Printf("预压缩前端资源失败: %v", err)
+	}
+	sa.html, _ = fs.ReadFile(sub, "index.html")
+	var saved int
+	for _, b := range sa.gz {
+		saved += len(b)
+	}
+	log.Printf("前端资源预压缩完成: %d 个文件, gzip 后共 %d KB", len(sa.gz), saved/1024)
+	return sa
+}
+
+func compressibleAsset(p string) bool {
+	switch strings.ToLower(filepath.Ext(p)) {
+	case ".js", ".css", ".html", ".svg", ".json", ".map", ".txt":
+		return true
+	}
+	return false
+}
+
+func (sa *staticAssets) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !sa.found {
+		http.Error(w, "前端资源未构建", http.StatusInternalServerError)
+		return
+	}
+	p := strings.TrimPrefix(r.URL.Path, "/")
+	if p == "" {
+		p = "index.html"
+	}
+
+	// 命中预压缩缓存 → 定长 gzip 响应
+	if gz, ok := sa.gz["/"+p]; ok && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		h := w.Header()
+		h.Set("Content-Type", mime.TypeByExtension(filepath.Ext(p)))
+		h.Set("Content-Encoding", "gzip")
+		h.Set("Content-Length", strconv.Itoa(len(gz)))
+		h.Set("Vary", "Accept-Encoding")
+		h.Set("Cache-Control", cacheControlFor(p))
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
 			return
 		}
-		fileServer.ServeHTTP(w, r)
-	})
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(gz)
+		return
+	}
+
+	// 其它（未压缩类型 / 不支持 gzip 的客户端）
+	if _, err := fs.Stat(sa.sub, p); err != nil {
+		if len(sa.html) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Length", strconv.Itoa(len(sa.html)))
+		w.Header().Set("Cache-Control", "no-cache")
+		_, _ = w.Write(sa.html)
+		return
+	}
+	b, err := fs.ReadFile(sa.sub, p)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", mime.TypeByExtension(filepath.Ext(p)))
+	w.Header().Set("Content-Length", strconv.Itoa(len(b)))
+	w.Header().Set("Cache-Control", cacheControlFor(p))
+	_, _ = w.Write(b)
+}
+
+// 带哈希的构建产物可以长期强缓存；入口 HTML 不缓存，便于发版后立即生效
+func cacheControlFor(p string) string {
+	if strings.HasPrefix(p, "assets/") && strings.Contains(filepath.Base(p), "-") {
+		return "public, max-age=31536000, immutable"
+	}
+	return "no-cache"
+}
+
+// runFrontendNode 前端节点：静态资源本机直发，/api/* 反代回后端（通常是 NAS 上的隧道端口）。
+// 背景：NAS 上行带宽很小（穿透实测单个响应 >55KB 基本拉不动，1MB 的前端包直接报
+// ERR_INCOMPLETE_CHUNKED_ENCODING）。把前端放到公网 VPS 就近直发、只有小的 API 请求
+// 走隧道，页面才能真正打开。
+func runFrontendNode(addr, backend string) {
+	if addr == "" {
+		addr = ":8787"
+	}
+	target, err := url.Parse(backend)
+	if err != nil {
+		log.Fatalf("-frontend-for 不是合法地址: %v", err)
+	}
+	rp := httputil.NewSingleHostReverseProxy(target)
+	rp.FlushInterval = -1 // SSE 需要立刻透传，不能缓冲
+	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		log.Printf("反代 %s 失败: %v", r.URL.Path, err)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error":"后端不可达"}`))
+	}
+
+	assets := newStaticAssets()
+	mux := http.NewServeMux()
+	mux.Handle("/api/", rp)
+	mux.Handle("/", assets)
+
+	srv := &http.Server{Addr: addr, Handler: logRequests(mux), ReadHeaderTimeout: 15 * time.Second}
+	log.Printf("前端节点模式：监听 %s，静态资源本机直发，/api/* → %s", addr, backend)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("HTTP 服务退出: %v", err)
+	}
 }
 
 func logRequests(next http.Handler) http.Handler {
