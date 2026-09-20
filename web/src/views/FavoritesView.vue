@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api'
 import { useAppStore } from '@/store/app'
 import { useDownloadActions } from '@/composables/useDownloadActions'
+import { useIsMobile } from '@/composables/useIsMobile'
 import ComicCard from '@/components/ComicCard.vue'
 import CoverImage from '@/components/CoverImage.vue'
 import ComicDetailDialog from '@/components/ComicDetailDialog.vue'
@@ -12,6 +13,8 @@ import PageBar from '@/components/PageBar.vue'
 import { downloadStateOf, formatBytes, formatTime } from '@/utils/format'
 
 const store = useAppStore()
+/* 手机端：只保留卡片视图 + 底部批量操作栏 */
+const isMobile = useIsMobile()
 
 const accountId = ref(null)
 const keyword = ref('')
@@ -148,13 +151,13 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="ms-panel">
+  <div class="ms-panel" :class="{ 'ms-has-mbar': isMobile }">
     <div class="ms-panel-title">
       <span>
         我的收藏
         <span class="ms-sub">· 共 {{ total }} 部</span>
       </span>
-      <div class="view-switch">
+      <div v-if="!isMobile" class="view-switch">
         <el-radio-group v-model="viewMode" size="small">
           <el-radio-button value="card">卡片</el-radio-button>
           <el-radio-button value="table">表格</el-radio-button>
@@ -193,20 +196,22 @@ onMounted(async () => {
       <el-button type="primary" :disabled="!accountId" :loading="loading" @click="search">搜索</el-button>
       <el-button :disabled="!accountId" :loading="loading" @click="load">刷新</el-button>
 
-      <el-divider direction="vertical" />
+      <template v-if="!isMobile">
+        <el-divider direction="vertical" />
 
-      <el-button :disabled="!items.length" @click="toggleSelectAll">
-        {{ allSelected ? '取消全选' : '全选本页' }}
-      </el-button>
-      <el-button
-        type="primary"
-        plain
-        :disabled="!selectedItems.length"
-        :loading="busy"
-        @click="batchDownload"
-      >
-        批量下载（{{ selectedItems.length }}）
-      </el-button>
+        <el-button :disabled="!items.length" @click="toggleSelectAll">
+          {{ allSelected ? '取消全选' : '全选本页' }}
+        </el-button>
+        <el-button
+          type="primary"
+          plain
+          :disabled="!selectedItems.length"
+          :loading="busy"
+          @click="batchDownload"
+        >
+          批量下载（{{ selectedItems.length }}）
+        </el-button>
+      </template>
     </div>
 
     <el-alert
@@ -226,8 +231,8 @@ onMounted(async () => {
       class="mb10"
     />
 
-    <!-- 卡片视图 -->
-    <div v-if="viewMode === 'card'" v-loading="loading" class="ms-comic-grid">
+    <!-- 卡片视图（手机端固定卡片；封面 2 列自适应） -->
+    <div v-if="isMobile || viewMode === 'card'" v-loading="loading" class="ms-comic-grid">
       <ComicCard
         v-for="item in items"
         :key="`${item.kind}-${item.comicId}`"
@@ -339,6 +344,25 @@ onMounted(async () => {
       当前账号：{{ currentAccount.nickname || currentAccount.username }} ·
       最近登录 {{ formatTime(currentAccount.lastLoginAt) }} ·
       最近同步 {{ currentAccount.lastSyncAt ? formatTime(currentAccount.lastSyncAt) : '从未' }}
+    </div>
+
+    <!-- 手机端底部固定操作栏：选择与批量下载 -->
+    <div v-if="isMobile" class="ms-mbar">
+      <span class="grow">
+        已选 <b>{{ selectedItems.length }}</b> / {{ items.length }} 部
+      </span>
+      <el-button size="small" :disabled="!items.length" @click="toggleSelectAll">
+        {{ allSelected ? '取消全选' : '全选本页' }}
+      </el-button>
+      <el-button
+        size="small"
+        type="primary"
+        :disabled="!selectedItems.length"
+        :loading="busy"
+        @click="batchDownload"
+      >
+        批量下载
+      </el-button>
     </div>
   </div>
 

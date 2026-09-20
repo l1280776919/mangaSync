@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api'
 import { useAppStore } from '@/store/app'
+import { useIsMobile } from '@/composables/useIsMobile'
 import JobProgress from '@/components/JobProgress.vue'
 import LogDialog from '@/components/LogDialog.vue'
 import KindTag from '@/components/KindTag.vue'
@@ -16,6 +17,8 @@ import {
 } from '@/utils/format'
 
 const store = useAppStore()
+/* 手机端：表格视图退化为卡片列表（宽表格在手机上无法阅读） */
+const isMobile = useIsMobile()
 
 const status = ref('')
 const page = ref(1)
@@ -182,15 +185,15 @@ function elapsedText(row) {
         <el-option v-for="o in statusOptions" :key="o.value" :label="o.label" :value="o.value" />
       </el-select>
       <span class="ms-dim speed-note">当前总速度：{{ formatSpeed(totalSpeed) }}</span>
-      <div class="spacer" />
-      <el-radio-group v-model="viewMode" size="small">
+      <div v-if="!isMobile" class="spacer" />
+      <el-radio-group v-if="!isMobile" v-model="viewMode" size="small">
         <el-radio-button value="card">卡片</el-radio-button>
         <el-radio-button value="table">表格</el-radio-button>
       </el-radio-group>
     </div>
 
-    <!-- 卡片视图 -->
-    <div v-if="viewMode === 'card'" v-loading="loading" class="job-list">
+    <!-- 卡片视图（手机端固定用卡片） -->
+    <div v-if="isMobile || viewMode === 'card'" v-loading="loading" class="job-list">
       <JobProgress
         v-for="job in liveItems"
         :key="job.id"

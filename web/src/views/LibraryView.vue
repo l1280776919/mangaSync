@@ -2,10 +2,15 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api'
+import { useIsMobile } from '@/composables/useIsMobile'
+import CoverImage from '@/components/CoverImage.vue'
 import KindTag from '@/components/KindTag.vue'
 import PageBar from '@/components/PageBar.vue'
 import StatCard from '@/components/StatCard.vue'
 import { KIND_OPTIONS, formatBytes, formatTime, fromNow } from '@/utils/format'
+
+/* 手机端：宽表格换成 2 列封面卡片网格 */
+const isMobile = useIsMobile()
 
 const kind = ref('')
 const keyword = ref('')
@@ -159,7 +164,51 @@ onMounted(load)
       <el-button type="primary" :loading="loading" @click="search">搜索</el-button>
     </div>
 
+    <!-- 手机端：2 列封面卡片（宽屏仍是表格） -->
+    <div v-if="isMobile" v-loading="loading" class="ms-comic-grid">
+      <div v-for="row in items" :key="row.id" class="ms-comic">
+        <div class="ms-comic-cover">
+          <CoverImage :kind="row.kind" :comic-id="row.comicId" :src="row.cover" :title="row.title" />
+          <div class="ms-comic-tags">
+            <KindTag :kind="row.kind" />
+            <el-tag size="small" effect="plain" :type="row.source === 'scan' ? 'warning' : 'success'">
+              {{ row.source === 'scan' ? '扫描' : '数据库' }}
+            </el-tag>
+          </div>
+        </div>
+        <div class="ms-comic-body">
+          <div class="ms-comic-title" :title="row.title">{{ row.title || '未命名' }}</div>
+          <div class="ms-comic-meta ms-mono" :title="row.comicId">{{ row.comicId }}</div>
+          <div class="lib-meta">
+            <span>{{ row.chapters ?? 0 }} 章</span>
+            <span>{{ row.images ?? 0 }} 图</span>
+            <span>{{ formatBytes(row.bytes) }}</span>
+          </div>
+          <div class="ms-comic-meta" :title="row.path">{{ row.path || '—' }}</div>
+          <div class="ms-comic-meta" :title="formatTime(row.updatedAt, true)">
+            {{ fromNow(row.updatedAt) }} 更新
+          </div>
+          <div class="lib-actions">
+            <el-button size="small" :loading="deletingId === row.id" @click="deleteItem(row)">移除记录</el-button>
+            <el-button
+              size="small"
+              type="danger"
+              plain
+              :loading="deletingId === row.id && deletingFiles"
+              @click="deleteWithFiles(row)"
+            >
+              删除文件
+            </el-button>
+          </div>
+        </div>
+      </div>
+      <div v-if="!items.length && !loading" class="ms-empty lib-empty">
+        漫画库还是空的，可以先到「收藏」页下载几本，或点「重新扫描目录」
+      </div>
+    </div>
+
     <el-table
+      v-else
       v-loading="loading"
       :data="items"
       size="small"
@@ -262,5 +311,30 @@ onMounted(load)
   .sort-select {
     width: 100%;
   }
+}
+
+/* 手机端卡片网格里的信息行与操作按钮 */
+.lib-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--ms-text-dim);
+}
+
+.lib-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+.lib-actions :deep(.el-button) {
+  width: 100%;
+  margin-left: 0;
+}
+
+.lib-empty {
+  grid-column: 1 / -1;
 }
 </style>

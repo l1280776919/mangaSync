@@ -5,10 +5,15 @@ import api, { authErrorMessage } from '@/api'
 import { useAppStore } from '@/store/app'
 import { auth } from '@/store/auth'
 import { changePassword, logout } from '@/composables/useAuth'
+import { useIsMobile } from '@/composables/useIsMobile'
 import StatCard from '@/components/StatCard.vue'
 import { QUALITY_OPTIONS, formatBytes, formatTime } from '@/utils/format'
 
 const store = useAppStore()
+/* 手机端：表单标签改为顶部对齐，控件撑满屏宽 */
+const isMobile = useIsMobile()
+const formLabelWidth = computed(() => (isMobile.value ? 'auto' : '132px'))
+const formLabelPosition = computed(() => (isMobile.value ? 'top' : 'right'))
 
 const loading = ref(false)
 const saving = ref(false)
@@ -22,8 +27,6 @@ const form = reactive({
   jmDir: '',
   picaProxy: '',
   jmProxy: '',
-  jmVenv: '',
-  jmBridge: '',
   concurrency: 2,
   imageWorkers: 8,
   quality: 'original',
@@ -161,8 +164,6 @@ async function load() {
       jmDir: s?.jmDir ?? '',
       picaProxy: s?.picaProxy ?? '',
       jmProxy: s?.jmProxy ?? '',
-      jmVenv: s?.jmVenv ?? '',
-      jmBridge: s?.jmBridge ?? '',
       concurrency: s?.concurrency ?? 2,
       imageWorkers: s?.imageWorkers ?? 8,
       quality: s?.quality ?? 'original',
@@ -200,8 +201,6 @@ async function save() {
         jmDir: form.jmDir,
         picaProxy: form.picaProxy,
         jmProxy: form.jmProxy,
-        jmVenv: form.jmVenv,
-        jmBridge: form.jmBridge,
         concurrency: Number(form.concurrency),
         imageWorkers: Number(form.imageWorkers),
         quality: form.quality,
@@ -278,8 +277,8 @@ onMounted(async () => {
       ref="pwFormRef"
       :model="pwForm"
       :rules="pwRules"
-      label-width="132px"
-      label-position="right"
+      :label-width="formLabelWidth"
+      :label-position="formLabelPosition"
       class="setting-form"
       @submit.prevent="submitPassword"
     >
@@ -344,8 +343,8 @@ onMounted(async () => {
       v-loading="loading"
       :model="form"
       :rules="rules"
-      label-width="132px"
-      label-position="right"
+      :label-width="formLabelWidth"
+      :label-position="formLabelPosition"
       class="setting-form"
     >
       <el-divider content-position="left">下载路径</el-divider>
@@ -360,6 +359,12 @@ onMounted(async () => {
       <el-form-item label="哔咔子目录">
         <el-input v-model="form.picaDir" placeholder="PicaComic" />
         <div class="tip">相对下载根目录，最终路径：根目录 / 子目录 / 作品名</div>
+      </el-form-item>
+
+      <el-form-item label="禁漫图片编码">
+        <div class="tip" style="margin: 0">
+          禁漫为纯 Go 实现（无 Python 依赖）：带乱序的图会还原后<strong>无损</strong>保存，体积约为站点有损版 2~3 倍。
+        </div>
       </el-form-item>
 
       <el-form-item label="禁漫子目录">
@@ -395,17 +400,6 @@ onMounted(async () => {
         <div class="tip">只有哔咔（pica）支持质量切换。</div>
       </el-form-item>
 
-      <el-divider content-position="left">禁漫运行时（Python）</el-divider>
-
-      <el-form-item label="jm venv 路径">
-        <el-input v-model="form.jmVenv" placeholder="python3（装了 jmcomic 的解释器）" clearable />
-        <div class="tip">调用 jmcomic 的 python 解释器路径。</div>
-      </el-form-item>
-
-      <el-form-item label="jm bridge 脚本">
-        <el-input v-model="form.jmBridge" placeholder="engines/jm_bridge.py" clearable />
-      </el-form-item>
-
       <el-divider content-position="left">定时同步</el-divider>
 
       <el-form-item label="启用定时同步">
@@ -420,7 +414,7 @@ onMounted(async () => {
           value-format="HH:mm"
           placeholder="04:30"
           :disabled="!form.schedule.enabled"
-          style="width: 160px"
+          :style="{ width: isMobile ? '100%' : '160px' }"
         />
       </el-form-item>
 
@@ -518,5 +512,27 @@ onMounted(async () => {
 
 :deep(.el-form-item__content) {
   flex-wrap: wrap;
+}
+
+/* 手机端：标签置顶、数字/时间控件撑满，避免 132px 标签挤掉输入框 */
+@media (max-width: 768px) {
+  .setting-form {
+    max-width: 100%;
+  }
+
+  .setting-form :deep(.el-input-number),
+  .setting-form :deep(.el-time-picker) {
+    width: 100% !important;
+  }
+
+  .tip-inline {
+    display: block;
+    margin-left: 0;
+    margin-top: 4px;
+  }
+
+  .account-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

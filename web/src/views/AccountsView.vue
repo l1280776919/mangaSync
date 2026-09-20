@@ -1,13 +1,17 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api'
 import { useAppStore } from '@/store/app'
+import { useIsMobile } from '@/composables/useIsMobile'
 import KindTag from '@/components/KindTag.vue'
 import StatusTag from '@/components/StatusTag.vue'
 import { KIND_OPTIONS, formatTime, fromNow } from '@/utils/format'
 
 const store = useAppStore()
+/* 手机端：表格转卡片，对话框接近全屏 */
+const isMobile = useIsMobile()
+const dialogWidth = computed(() => (isMobile.value ? '94%' : '460px'))
 
 const loading = ref(false)
 const rows = ref([])
@@ -182,7 +186,15 @@ onMounted(load)
       </div>
     </div>
 
-    <el-table v-loading="loading" :data="rows" size="small" empty-text="还没有账号，点右上角「新增账号」添加" row-key="id">
+    <!-- 宽屏：表格 -->
+    <el-table
+      v-if="!isMobile"
+      v-loading="loading"
+      :data="rows"
+      size="small"
+      empty-text="还没有账号，点右上角「新增账号」添加"
+      row-key="id"
+    >
       <el-table-column label="源" width="80">
         <template #default="{ row }">
           <KindTag :kind="row.kind" />
@@ -245,7 +257,73 @@ onMounted(load)
       </el-table-column>
     </el-table>
 
-    <div v-if="!rows.length && !loading" class="foot-tip">
+    <!-- 手机端：卡片列表（大触摸区，信息分层） -->
+    <div v-else v-loading="loading" class="ms-mlist">
+      <div v-for="row in rows" :key="row.id" class="ms-mcard">
+        <div class="ms-mcard-head">
+          <div class="acct-title">
+            <KindTag :kind="row.kind" />
+            <span class="ms-mcard-title">{{ row.label || row.username }}</span>
+          </div>
+          <StatusTag domain="account" :value="statusOf(row)" />
+        </div>
+
+        <div class="ms-mcard-rows">
+          <div class="ms-mrow">
+            <span class="k">账号</span>
+            <span class="v">{{ row.username }}</span>
+          </div>
+          <div class="ms-mrow">
+            <span class="k">昵称</span>
+            <span class="v">{{ row.nickname || '—' }}</span>
+          </div>
+          <div class="ms-mrow">
+            <span class="k">等级 / 收藏</span>
+            <span class="v">
+              {{ row.level ?? '—' }} 级 ·
+              {{ row.favoritesCount ?? 0 }}<span v-if="row.favoritesMax" class="ms-dim">/{{ row.favoritesMax }}</span>
+            </span>
+          </div>
+          <div class="ms-mrow">
+            <span class="k">最近登录</span>
+            <span class="v">{{ fromNow(row.lastLoginAt) }}</span>
+          </div>
+          <div class="ms-mrow">
+            <span class="k">最近同步</span>
+            <span class="v">{{ fromNow(row.lastSyncAt) }}</span>
+          </div>
+          <div v-if="row.error" class="ms-mrow">
+            <span class="k">错误</span>
+            <span class="v danger-text">{{ row.error }}</span>
+          </div>
+          <div v-if="row.note" class="ms-mrow">
+            <span class="k">备注</span>
+            <span class="v ms-dim">{{ row.note }}</span>
+          </div>
+        </div>
+
+        <div class="ms-mcard-actions">
+          <el-button size="small" :loading="rowBusy[row.id] === 'login'" @click="testLogin(row)">测试登录</el-button>
+          <el-button
+            size="small"
+            type="primary"
+            plain
+            :loading="rowBusy[row.id] === 'sync'"
+            @click="syncNow(row)"
+          >
+            立即同步
+          </el-button>
+          <el-button size="small" @click="openEdit(row)">编辑</el-button>
+          <el-button size="small" type="danger" plain @click="removeAccount(row)">删除</el-button>
+        </div>
+      </div>
+
+      <div v-if="!rows.length && !loading" class="ms-empty">
+        还没有账号，点上方「新增账号」添加
+      </div>
+    </div>
+
+    <div v-if="!isMobile && !rows.length && !loading" class="foot-tip">
       <el-button type="primary" plain @click="openCreate">新增第一个账号</el-button>
     </div>
   </div>
@@ -253,10 +331,16 @@ onMounted(load)
   <el-dialog
     v-model="dialogVisible"
     :title="dialogMode === 'create' ? '新增账号' : '编辑账号'"
-    width="min(460px, 94vw)"
+    :width="dialogWidth"
     append-to-body
   >
-    <el-form ref="formRef" :model="form" :rules="rules" label-width="76px" label-position="right">
+    <el-form
+      ref="formRef"
+      :model="form"
+      :rules="rules"
+      :label-width="isMobile ? 'auto' : '76px'"
+      :label-position="isMobile ? 'top' : 'right'"
+    >
       <el-form-item label="源" prop="kind">
         <el-radio-group v-model="form.kind" :disabled="dialogMode === 'edit'">
           <el-radio-button v-for="k in kindOptions" :key="k.value" :value="k.value">
@@ -317,5 +401,13 @@ onMounted(load)
 .foot-tip {
   text-align: center;
   padding: 16px 0 4px;
+}
+
+.acct-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
 }
 </style>

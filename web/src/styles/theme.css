@@ -265,19 +265,374 @@ a {
   gap: 10px;
 }
 
-/* 移动端 */
-@media (max-width: 640px) {
+/* ============================================================
+   手机端（≤768px）：触摸目标、堆叠布局、对话框全屏化
+   视图层断点见 src/composables/useIsMobile.js
+   ============================================================ */
+@media (max-width: 768px) {
+  /* ---------- 触摸目标 ≥40px ---------- */
+  .el-button {
+    min-height: 40px;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+
+  .el-button--small {
+    min-height: 40px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .el-button.is-link,
+  .el-button.is-text {
+    min-height: 40px;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .el-input__wrapper,
+  .el-select__wrapper,
+  .el-textarea__inner,
+  .el-input-number .el-input__wrapper {
+    min-height: 40px;
+  }
+
+  .el-radio-button__inner {
+    min-height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .el-radio-group,
+  .el-checkbox-group {
+    flex-wrap: wrap;
+  }
+
+  .el-switch {
+    min-height: 24px;
+  }
+
+  /* ---------- 面板与标题 ---------- */
   .ms-panel {
     padding: 12px;
   }
+
+  .ms-panel + .ms-panel {
+    margin-top: 12px;
+  }
+
+  .ms-panel-title {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    font-size: 14px;
+    margin-bottom: 10px;
+  }
+
+  .ms-panel-title .head-actions,
+  .ms-panel-title .title-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .ms-panel-title .head-actions .el-button,
+  .ms-panel-title .title-actions .el-button {
+    margin-left: 0;
+    flex: 1 1 auto;
+  }
+
+  /* ---------- 工具栏：纵向堆叠、控件撑满 ---------- */
+  .ms-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .ms-toolbar > * {
+    width: 100% !important;
+    margin-left: 0;
+  }
+
+  .ms-toolbar .grow {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  /* 竖分隔线在堆叠布局里没意义 */
+  .ms-toolbar .el-divider--vertical {
+    display: none;
+  }
+
+  /* ---------- 封面网格：手机上 2 列起，封面自适应 ---------- */
   .ms-comic-grid {
     grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
     gap: 10px;
   }
-  .ms-stat-grid {
-    grid-template-columns: repeat(2, 1fr);
+
+  .ms-comic-body {
+    padding: 8px;
+    gap: 3px;
   }
+
+  .ms-comic-title {
+    font-size: 12px;
+  }
+
+  .ms-comic-actions > .el-button {
+    flex: 1 1 40%;
+    margin-left: 0;
+  }
+
+  /* ---------- 统计卡 ---------- */
+  .ms-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .ms-stat {
+    padding: 10px 12px;
+    min-width: 0;
+  }
+
   .ms-stat .value {
     font-size: 18px;
   }
+
+  /* ---------- 分页条 ---------- */
+  .ms-pager {
+    justify-content: center;
+    padding: 10px 0 2px;
+  }
+
+  .ms-pager .el-pagination {
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 8px;
+  }
+
+  .ms-pager .el-pagination button,
+  .ms-pager .el-pager li {
+    min-width: 34px;
+    height: 34px;
+    line-height: 34px;
+  }
+
+  /* ---------- 任务进度行 → 卡片 ---------- */
+  .ms-job-row {
+    background: var(--ms-bg-soft);
+    border: 1px solid var(--ms-border);
+    border-radius: 10px;
+    padding: 12px;
+    gap: 8px;
+  }
+
+  .ms-job-row + .ms-job-row {
+    margin-top: 10px;
+  }
+
+  .ms-job-head {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .ms-job-actions > .el-button,
+  .job-actions > .el-button {
+    flex: 1 1 40%;
+    margin-left: 0;
+  }
+
+  /* ---------- 对话框 / 消息框：接近全屏 ---------- */
+  .el-dialog {
+    --el-dialog-width: 94% !important;
+    --el-dialog-margin-top: 4vh !important;
+    border-radius: 12px;
+  }
+
+  .el-dialog__header {
+    padding: 14px 14px 6px;
+    margin-right: 0;
+  }
+
+  .el-dialog__title {
+    font-size: 16px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
+  .el-dialog__headerbtn {
+    width: 44px;
+    height: 44px;
+    top: 4px;
+    right: 2px;
+  }
+
+  .el-dialog__body {
+    padding: 10px 14px;
+    max-height: 62vh;
+    overflow-y: auto;
+  }
+
+  .el-dialog__footer {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 10px 14px 14px;
+  }
+
+  .el-dialog__footer .el-button + .el-button {
+    margin-left: 0;
+  }
+
+  .el-message-box {
+    width: 90% !important;
+    max-width: 90vw;
+  }
+
+  .el-message-box__btns {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .el-message-box__btns .el-button {
+    margin-left: 0 !important;
+    flex: 1 1 45%;
+  }
+
+  .el-drawer.rtl,
+  .el-drawer.ltr {
+    max-width: 86vw;
+  }
+}
+
+/* ============================================================
+   手机端表格 → 卡片列表（视图层 v-if 切换，这里只提供样式）
+   ============================================================ */
+.ms-mlist {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ms-mcard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--ms-bg-soft);
+  border: 1px solid var(--ms-border);
+  border-radius: 10px;
+}
+
+.ms-mcard-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ms-mcard-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.ms-mcard-sub {
+  font-size: 10px;
+  color: var(--ms-text-dim);
+}
+
+.ms-mcard-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.ms-mrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ms-mrow > .k {
+  flex-shrink: 0;
+  width: 66px;
+  color: var(--ms-text-dim);
+}
+
+.ms-mrow > .v {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ms-mcard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ms-mcard-actions > .el-button {
+  flex: 1 1 44%;
+  margin-left: 0;
+}
+
+/* 缩略封面（卡片左侧） */
+.ms-mcover {
+  width: 52px;
+  height: 70px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--ms-border);
+}
+
+/* ============================================================
+   手机端底部固定操作栏（批量选择）
+   ============================================================ */
+.ms-mbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1800;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  background: rgba(23, 26, 32, 0.97);
+  border-top: 1px solid var(--ms-border);
+  backdrop-filter: blur(8px);
+}
+
+.ms-mbar .el-button {
+  margin-left: 0;
+  flex-shrink: 0;
+}
+
+.ms-mbar .grow {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ms-mbar-tip {
+  font-size: 12px;
+  color: var(--ms-text-dim);
+}
+
+/* 有底部栏时给内容留出空间，避免遮住最后一个卡片 */
+.ms-has-mbar {
+  padding-bottom: 80px;
 }

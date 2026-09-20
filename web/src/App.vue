@@ -1,15 +1,16 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/store/app'
 import { auth } from '@/store/auth'
 import { logout } from '@/composables/useAuth'
+import { useIsMobile } from '@/composables/useIsMobile'
 
 const route = useRoute()
 const router = useRouter()
 const store = useAppStore()
 
-const isMobile = ref(false)
+const isMobile = useIsMobile()
 const drawerOpen = ref(false)
 const loggingOut = ref(false)
 
@@ -43,10 +44,9 @@ const sseTag = computed(() => {
   return { type: 'info', text: '未连接' }
 })
 
-function syncViewport() {
-  isMobile.value = window.innerWidth < 768
-  if (!isMobile.value) drawerOpen.value = false
-}
+watch(isMobile, (m) => {
+  if (!m) drawerOpen.value = false
+})
 
 function go(path) {
   router.push(path)
@@ -84,13 +84,7 @@ watch(
 )
 
 onMounted(async () => {
-  syncViewport()
-  window.addEventListener('resize', syncViewport)
   if (!isAuthPage.value) bootstrap()
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', syncViewport)
 })
 </script>
 
@@ -326,6 +320,8 @@ onUnmounted(() => {
   font-size: 16px;
   font-weight: 600;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .header-right {
@@ -345,10 +341,22 @@ onUnmounted(() => {
   background: var(--ms-bg);
 }
 
-@media (max-width: 640px) {
+/* 手机端：更紧凑的头部与内容边距，长标题省略而不是撑破 */
+@media (max-width: 768px) {
+  .app-header {
+    height: 52px;
+    padding: 0 8px;
+    gap: 6px;
+  }
+
+  .app-header :deep(.el-button) {
+    padding: 0 8px;
+  }
+
   .app-main {
     padding: 10px;
   }
+
   .hide-xs {
     display: none;
   }

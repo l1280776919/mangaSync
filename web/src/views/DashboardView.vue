@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '@/api'
 import { useAppStore } from '@/store/app'
+import { useIsMobile } from '@/composables/useIsMobile'
 import StatCard from '@/components/StatCard.vue'
 import JobProgress from '@/components/JobProgress.vue'
 import LogDialog from '@/components/LogDialog.vue'
@@ -12,6 +13,8 @@ import { formatBytes, formatSpeed, fromNow } from '@/utils/format'
 
 const router = useRouter()
 const store = useAppStore()
+/* 手机端：最近完成列表由表格换成卡片 */
+const isMobile = useIsMobile()
 
 const stats = ref(null)
 const loadingStats = ref(false)
@@ -186,7 +189,47 @@ const shortcuts = [
         <el-button size="small" text type="primary" @click="router.push('/downloads')">查看全部任务</el-button>
       </div>
 
-      <el-table v-loading="loadingRecent" :data="recentDone" size="small" empty-text="还没有完成的任务">
+      <!-- 手机端：卡片列表 -->
+      <div v-if="isMobile" v-loading="loadingRecent" class="ms-mlist">
+        <div v-for="row in recentDone" :key="row.id" class="ms-mcard">
+          <div class="ms-mcard-head">
+            <div class="recent-title">
+              <KindTag :kind="row.kind" />
+              <span class="ms-mcard-title">{{ row.title || row.comicId }}</span>
+            </div>
+            <StatusTag domain="job" :value="row.status" />
+          </div>
+          <div class="ms-mcard-rows">
+            <div class="ms-mrow">
+              <span class="k">章节 / 图片</span>
+              <span class="v">
+                {{ row.chaptersDone ?? 0 }}/{{ row.chaptersTotal ?? 0 }} 章 ·
+                {{ row.imagesDone ?? 0 }}/{{ row.imagesTotal ?? 0 }} 图
+              </span>
+            </div>
+            <div class="ms-mrow">
+              <span class="k">大小</span>
+              <span class="v">{{ formatBytes(row.bytes) }}</span>
+            </div>
+            <div class="ms-mrow">
+              <span class="k">完成时间</span>
+              <span class="v">{{ row.finishedAt ? fromNow(row.finishedAt) : '—' }}</span>
+            </div>
+          </div>
+          <div class="ms-mcard-actions">
+            <el-button size="small" type="primary" plain @click="openLogs(row)">查看日志</el-button>
+          </div>
+        </div>
+        <div v-if="!recentDone.length && !loadingRecent" class="ms-empty">还没有完成的任务</div>
+      </div>
+
+      <el-table
+        v-else
+        v-loading="loadingRecent"
+        :data="recentDone"
+        size="small"
+        empty-text="还没有完成的任务"
+      >
         <el-table-column label="源" width="76">
           <template #default="{ row }">
             <KindTag :kind="row.kind" />
@@ -248,5 +291,20 @@ const shortcuts = [
 
 .shortcuts :deep(.el-button) {
   margin-left: 0;
+}
+
+.recent-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+/* 手机端：快捷入口两列排布，触摸区更大 */
+@media (max-width: 768px) {
+  .shortcuts :deep(.el-button) {
+    flex: 1 1 44%;
+  }
 }
 </style>
