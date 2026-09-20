@@ -17,6 +17,7 @@
           <template v-if="meta.pages">{{ page }} / {{ meta.pages }}</template>
           <template v-else>— / —</template>
           <span v-if="meta.local" class="rd-local" title="本地已下载，秒开">本地</span>
+          <span class="rd-origin-tag" title="当前以无损原画画质呈现">原画</span>
         </div>
 
         <el-select v-model="order" class="rd-chap" size="small" :teleported="true" @change="switchChapter">
@@ -551,6 +552,15 @@ onBeforeUnmount(() => {
   opacity: 0.85;
   white-space: nowrap;
 }
+.rd-origin-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--el-color-primary-light-9, #eff4fe);
+  color: var(--el-color-primary, #2f6fed);
+  border: 1px solid var(--el-color-primary-light-7, #c8d9fb);
+}
 .rd-local {
   font-size: 11px;
   padding: 0 5px;
@@ -598,6 +608,8 @@ onBeforeUnmount(() => {
 }
 /* 图片绝对定位铺满占位块：占位比例与图片一致时无变形 */
 .rd-item img {
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
   position: absolute;
   inset: 0;
   width: 100%;
@@ -618,6 +630,8 @@ onBeforeUnmount(() => {
   scroll-snap-align: start;
 }
 .rd-fit-height .rd-item img {
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
   object-fit: contain;
 }
 .rd-fit-original .rd-pages {
@@ -625,6 +639,8 @@ onBeforeUnmount(() => {
   margin: 0 auto;
 }
 .rd-fit-original .rd-item img {
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
   object-fit: contain;
 }
 

@@ -774,10 +774,8 @@ func (j *JM) PageImage(ctx context.Context, cred *Cred, comicID string, order, p
 	if num <= 0 {
 		return raw, jmImageContentType(name), nil
 	}
+	// 统一原画画质：不再使用有损 jpeg 二次压缩
 	mode := "lossless"
-	if preview {
-		mode = "jpeg" // 在线阅读：小图快传
-	}
 	data, ext, err := jmEncodePage(raw, num, mode)
 	if err != nil {
 		return nil, "", err

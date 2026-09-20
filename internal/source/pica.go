@@ -58,6 +58,9 @@ type picaURLs struct {
 }
 
 func NewPica(proxy, quality string, imageWorkers int) *Pica {
+	if quality == "" {
+		quality = "original"
+	}
 	return &Pica{
 		proxy:        proxy,
 		quality:      quality,

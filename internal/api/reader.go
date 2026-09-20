@@ -114,7 +114,8 @@ func (s *Server) readerPage(w http.ResponseWriter, r *http.Request) {
 			acc = a
 		}
 	}
-	b, ct, err := src.PageImage(r.Context(), s.bestCred(acc, kind), comicID, order, page, true)
+	// 阅读全面采用原画画质（preview 传 false，开启无损还原）
+	b, ct, err := src.PageImage(r.Context(), s.bestCred(acc, kind), comicID, order, page, false)
 	if err != nil {
 		writeErr(w, 404, "取图失败: %v", err)
 		return
