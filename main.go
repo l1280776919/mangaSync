@@ -1,6 +1,7 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"embed"
 	"flag"
@@ -22,6 +23,78 @@ import (
 
 //go:embed all:web/dist
 var webFS embed.FS
+
+// gzipMiddleware 对文本类响应做 gzip 压缩（前端 element-plus 打包后 1MB，压缩后 ~340KB，
+// 公网/穿透访问时差别很大；SSE 与二进制流不压缩）
+func gzipMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") || r.URL.Path == "/api/events" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Add("Vary", "Accept-Encoding")
+		gw := &gzipWriter{ResponseWriter: w}
+		defer gw.close()
+		next.ServeHTTP(gw, r)
+	})
+}
+
+type gzipWriter struct {
+	http.ResponseWriter
+	gz          *gzip.Writer
+	wroteHeader bool
+	compress    bool
+}
+
+func compressibleType(ct string) bool {
+	ct = strings.ToLower(ct)
+	for _, s := range []string{"javascript", "json", "text/", "css", "html", "svg", "xml"} {
+		if strings.Contains(ct, s) {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *gzipWriter) WriteHeader(code int) {
+	if g.wroteHeader {
+		return
+	}
+	g.wroteHeader = true
+	ct := g.Header().Get("Content-Type")
+	if ct != "" && compressibleType(ct) && !strings.Contains(ct, "event-stream") {
+		g.compress = true
+		g.Header().Set("Content-Encoding", "gzip")
+		g.Header().Del("Content-Length")
+		g.gz = gzip.NewWriter(g.ResponseWriter)
+	}
+	g.ResponseWriter.WriteHeader(code)
+}
+
+func (g *gzipWriter) Write(b []byte) (int, error) {
+	if !g.wroteHeader {
+		g.WriteHeader(http.StatusOK)
+	}
+	if g.compress && g.gz != nil {
+		return g.gz.Write(b)
+	}
+	return g.ResponseWriter.Write(b)
+}
+
+func (g *gzipWriter) Flush() {
+	if g.gz != nil {
+		_ = g.gz.Flush()
+	}
+	if f, ok := g.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (g *gzipWriter) close() {
+	if g.gz != nil {
+		_ = g.gz.Close()
+	}
+}
 
 func main() {
 	addr := flag.String("addr", "", "监听地址，例如 :8787（默认取设置里的 serverPort）")
@@ -72,7 +145,7 @@ func main() {
 	}
 	httpSrv := &http.Server{
 		Addr:              listen,
-		Handler:           logRequests(mux),
+		Handler:           logRequests(gzipMiddleware(api.BasicAuth(cfg, mux))),
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 	go func() {

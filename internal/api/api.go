@@ -1,6 +1,9 @@
 package api
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +25,69 @@ type Server struct {
 	cfg  *config.Manager
 	eng  *engine.Engine
 	base string // 缓存目录
+}
+
+const authCookieName = "ms_auth"
+
+// authCookieValue 由账号密码派生，服务端可无状态校验
+func authCookieValue(s config.Settings) string {
+	sum := sha256.Sum256([]byte("mangaSync:" + s.AuthUser + ":" + s.AuthPass))
+	return hex.EncodeToString(sum[:])
+}
+
+// BasicAuth 设置了 authUser 时要求认证，支持三种方式：
+//  1. ?token=<密码> → 种下 cookie 并跳转到去掉 token 的地址（公网访问最省事，不弹框）
+//  2. Cookie ms_auth（上面种下的）
+//  3. HTTP Basic 认证（curl / 浏览器原生弹框）
+//
+// /api/health 始终放行，便于外部探活。
+func BasicAuth(cfg *config.Manager, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s := cfg.Get()
+		if s.AuthUser == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		want := authCookieValue(s)
+
+		if tok := r.URL.Query().Get("token"); tok != "" {
+			if subtle.ConstantTimeCompare([]byte(tok), []byte(s.AuthPass)) == 1 {
+				http.SetCookie(w, &http.Cookie{
+					Name: authCookieName, Value: want, Path: "/",
+					HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 30 * 24 * 3600,
+				})
+				u := *r.URL
+				q := u.Query()
+				q.Del("token")
+				u.RawQuery = q.Encode()
+				http.Redirect(w, r, u.String(), http.StatusFound)
+				return
+			}
+		}
+
+		if r.URL.Path == "/api/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if c, err := r.Cookie(authCookieName); err == nil && subtle.ConstantTimeCompare([]byte(c.Value), []byte(want)) == 1 {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		u, p, ok := r.BasicAuth()
+		if ok &&
+			subtle.ConstantTimeCompare([]byte(u), []byte(s.AuthUser)) == 1 &&
+			subtle.ConstantTimeCompare([]byte(p), []byte(s.AuthPass)) == 1 {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		w.Header().Set("WWW-Authenticate", `Basic realm="mangaSync", charset="UTF-8"`)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"需要登录：访问 /?token=<访问密码> 或使用 HTTP Basic 认证"}`))
+	})
 }
 
 func NewServer(st *store.Store, cfg *config.Manager, eng *engine.Engine) *Server {
@@ -125,7 +191,21 @@ var (
 )
 
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, s.cfg.Get())
+	// 不回显访问密码（前端留空即表示不修改）
+	cur := s.cfg.Get()
+	if cur.AuthPass != "" {
+		cur.AuthPass = ""
+		cur = withAuthFlag(cur, true)
+	}
+	writeJSON(w, 200, cur)
+}
+
+// withAuthFlag 仅用于给前端一个「已设置密码」的信号，不暴露明文
+func withAuthFlag(s config.Settings, set bool) config.Settings {
+	if set {
+		s.AuthPass = "********"
+	}
+	return s
 }
 
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {

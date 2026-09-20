@@ -74,6 +74,30 @@ systemctl daemon-reload && systemctl enable --now mangasync
 打开 `http://<NAS>:8787`，先在「账号」页添加哔咔/禁漫账号（登录成功才会保存），
 然后「漫画库 → 重新扫描」把已有漫画索引进来，之后在「收藏」页点「同步账号收藏」即可增量下载。
 
+## 公网访问与访问认证
+
+默认只在局域网监听，如需从公网访问（frp / 反代 / 端口映射），**强烈建议先开启访问认证**：
+
+1. 设置页 →「访问控制」填访问账号与密码（或直接改 `config.json` 的 `authUser`/`authPass`）；
+2. 开启后所有请求都需要认证，`/api/health` 除外（便于探活）。
+
+三种认证方式，任选其一：
+
+```bash
+# 1) 浏览器最省事：访问一次带 token 的地址，会种下 cookie（30 天）并跳转到干净地址
+http://<公网地址>/?token=<访问密码>
+
+# 2) HTTP Basic（curl / 浏览器原生弹框）
+curl -u <账号>:<密码> http://<公网地址>/api/stats
+
+# 3) 显式带 cookie
+curl -c ck.txt "http://<公网地址>/?token=<访问密码>" && curl -b ck.txt http://<公网地址>/api/stats
+```
+
+> 提示：反代/穿透只走 HTTP 时，密码是明文传输的；公网长期使用建议在前面套一层 HTTPS
+> （域名 + Caddy/Nginx 自动证书，或自签证书）。
+> 服务对文本响应默认开启 gzip（前端 element-plus 打包 1MB → 约 340KB），穿透/公网访问更快。
+
 ## 与独立下载脚本的兼容性
 
 如果之前用独立脚本下载过漫画，把 `downloadRoot` 指到同一个目录即可：本系统沿用相同的目录命名约定

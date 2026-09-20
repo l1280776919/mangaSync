@@ -26,7 +26,9 @@ const form = reactive({
   imageWorkers: 8,
   quality: 'original',
   schedule: { enabled: false, time: '04:30' },
-  serverPort: 8787
+  serverPort: 8787,
+  authUser: '',
+  authPass: ''
 })
 
 const rules = {
@@ -83,7 +85,9 @@ async function load() {
         enabled: !!s?.schedule?.enabled,
         time: s?.schedule?.time || '04:30'
       },
-      serverPort: s?.serverPort ?? 8787
+      serverPort: s?.serverPort ?? 8787,
+      authUser: s?.authUser ?? '',
+      authPass: '' // 后端不回显密码，留空表示不修改
     })
     store.settings = s
   } catch (e) {
@@ -119,11 +123,17 @@ async function save() {
         imageWorkers: Number(form.imageWorkers),
         quality: form.quality,
         schedule: { enabled: !!form.schedule.enabled, time: form.schedule.time },
-        serverPort: Number(form.serverPort)
+        serverPort: Number(form.serverPort),
+        authUser: form.authUser,
+        authPass: form.authPass
       }
       const merged = await api.saveSettings(payload)
       store.settings = merged
-      Object.assign(form, { ...merged, schedule: { ...(merged?.schedule || form.schedule) } })
+      Object.assign(form, {
+        ...merged,
+        authPass: '', // 密码不回显，下一次留空即不修改
+        schedule: { ...(merged?.schedule || form.schedule) }
+      })
       ElMessage.success('设置已保存')
     } catch (e) {
       /* api.js 已提示 */
@@ -224,6 +234,24 @@ onMounted(async () => {
 
       <el-form-item label="jm bridge 脚本">
         <el-input v-model="form.jmBridge" placeholder="engines/jm_bridge.py" clearable />
+      </el-form-item>
+
+      <el-divider content-position="left">访问控制</el-divider>
+
+      <el-form-item label="访问账号">
+        <el-input v-model="form.authUser" placeholder="留空=不启用认证" clearable />
+        <div class="tip">填了账号后，所有访问（含公网反代）都需要 HTTP Basic 认证；/api/health 除外。</div>
+      </el-form-item>
+
+      <el-form-item label="访问密码">
+        <el-input
+          v-model="form.authPass"
+          type="password"
+          show-password
+          :placeholder="form.authUser ? '留空=保持原密码不变' : '设置访问密码'"
+          clearable
+        />
+        <div class="tip">密码不会回显。清空「访问账号」即可关闭认证。</div>
       </el-form-item>
 
       <el-divider content-position="left">定时同步</el-divider>
