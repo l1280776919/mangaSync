@@ -714,6 +714,8 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	ch := s.eng.Subscribe()
 	defer s.eng.Unsubscribe(ch)
+	fmt.Fprint(w, ": connected\n\n") // 立刻回一帧心跳，客户端好判断连接已建立
+	fl.Flush()
 	// 首帧：当前活动任务
 	for _, snap := range s.eng.ActiveJobSnapshots() {
 		b, _ := json.Marshal(snap)

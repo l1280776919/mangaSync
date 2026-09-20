@@ -321,12 +321,12 @@ func (j *JM) Download(ctx context.Context, cred *Cred, comicID string, orders []
 			h.prog(prog)
 		case "chapter":
 			st := ChapterState{
-				Order: intOf(ev["order"]),
-				Title: strOf(ev["title"]),
-				State: strOf(ev["state"]),
+				Order:  intOf(ev["order"]),
+				Title:  strOf(ev["title"]),
+				State:  strOf(ev["state"]),
 				Images: intOf(ev["images"]),
-				Path:  strOf(ev["path"]),
-				Err:   strOf(ev["msg"]),
+				Path:   strOf(ev["path"]),
+				Err:    strOf(ev["msg"]),
 			}
 			if st.State == "done" {
 				prog.ChaptersDone++

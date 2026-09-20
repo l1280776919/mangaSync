@@ -56,18 +56,18 @@ type Job struct {
 }
 
 type Comic struct {
-	ID            int64  `json:"id"`
-	Kind          string `json:"kind"`
-	ComicID       string `json:"comicId"`
-	Title         string `json:"title"`
-	Path          string `json:"path"`
-	Chapters      int    `json:"chapters"`
-	ChaptersDone  int    `json:"chaptersDone"`
-	Images        int    `json:"images"`
-	Bytes         int64  `json:"bytes"`
-	Complete      bool   `json:"complete"`
-	UpdatedAt     string `json:"updatedAt"`
-	Source        string `json:"source"`
+	ID           int64  `json:"id"`
+	Kind         string `json:"kind"`
+	ComicID      string `json:"comicId"`
+	Title        string `json:"title"`
+	Path         string `json:"path"`
+	Chapters     int    `json:"chapters"`
+	ChaptersDone int    `json:"chaptersDone"`
+	Images       int    `json:"images"`
+	Bytes        int64  `json:"bytes"`
+	Complete     bool   `json:"complete"`
+	UpdatedAt    string `json:"updatedAt"`
+	Source       string `json:"source"`
 }
 
 func now() string { return time.Now().Format(time.RFC3339) }

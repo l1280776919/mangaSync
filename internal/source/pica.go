@@ -190,10 +190,10 @@ func (p *Pica) Profile(ctx context.Context, cred *Cred) (*AccountInfo, error) {
 	}
 	var d struct {
 		User struct {
-			Name               string `json:"name"`
-			Level              int    `json:"level"`
-			FavouriteCount     int    `json:"favouriteCount"`
-			FavouriteMax       int    `json:"favouriteMax"`
+			Name           string `json:"name"`
+			Level          int    `json:"level"`
+			FavouriteCount int    `json:"favouriteCount"`
+			FavouriteMax   int    `json:"favouriteMax"`
 		} `json:"user"`
 	}
 	if err := json.Unmarshal(data, &d); err != nil {
