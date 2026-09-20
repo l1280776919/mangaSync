@@ -1,0 +1,46 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build (linux/amd64)
+        run: go build -trimpath -ldflags "-s -w" -o dist/mangasync_linux_amd64 .
+
+      - name: go build (linux/arm64)
+        run: GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o dist/mangasync_linux_arm64 .
+
+      - name: 前端构建自检（web/dist 已入库，这里只校验源码能构建）
+        run: |
+          cd web
+          npm install --no-audit --no-fund
+          npm run build
+        continue-on-error: true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mangasync-linux
+          path: dist/mangasync_linux_*
+
+      - name: 打 tag 时自动发布
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/mangasync_linux_*
