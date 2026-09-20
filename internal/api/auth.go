@@ -27,39 +27,36 @@ func sessionFrom(r *http.Request) *store.Session {
 	return sess
 }
 
-// SessionAuth 会话鉴权中间件：
-//   - 非 /api/ 路径（前端静态资源）放行，否则登录页都打不开
-//   - /api/health、/api/auth/login、/api/auth/logout 放行（各自处理未登录情况）
-//   - 其余接口必须带有效会话，否则 401
-//   - 处于「必须修改初始密码」状态时，除改密/登出/取当前用户外一律 403
+// 无需登录即可访问的接口：health 供探活，login/logout 自己处理未登录情况
+// （非 /api/ 路径一律放行，否则登录页的静态资源都拿不到）
+var publicPaths = map[string]bool{
+	"/api/health": true, "/api/auth/login": true, "/api/auth/logout": true,
+}
+
+// 处于「必须修改初始密码」状态时仍可访问的接口：改密、登出、取当前用户
+var duringMustChangePaths = map[string]bool{
+	"/api/auth/password": true, "/api/auth/logout": true, "/api/auth/me": true,
+}
+
+// SessionAuth 会话鉴权中间件：publicPaths 放行，其余接口必须带有效会话（否则 401）；
+// 未完成首次改密时，除 duringMustChangePaths 外一律 403。
 func (s *Server) SessionAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
-		if !strings.HasPrefix(path, "/api/") {
+		if !strings.HasPrefix(path, "/api/") || publicPaths[path] {
 			next.ServeHTTP(w, r)
 			return
 		}
-		switch path {
-		case "/api/health", "/api/auth/login", "/api/auth/logout":
-			next.ServeHTTP(w, r)
-			return
-		}
-
 		sess := s.lookupSession(r)
 		if sess == nil {
 			writeErr(w, http.StatusUnauthorized, "未登录")
 			return
 		}
-		switch path {
-		case "/api/auth/me", "/api/auth/password", "/api/auth/logout":
-			// 强制改密状态下也必须能用
-		default:
-			if sess.MustChangePassword {
-				writeJSON(w, http.StatusForbidden, map[string]any{
-					"error": "请先修改初始密码", "mustChangePassword": true,
-				})
-				return
-			}
+		if sess.MustChangePassword && !duringMustChangePaths[path] {
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error": "请先修改初始密码", "mustChangePassword": true,
+			})
+			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxSession, sess)))
 	})
