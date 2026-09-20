@@ -1,27 +1,43 @@
-/* mangaSync 暗色主题补充样式（Element Plus dark css-vars 之上） */
+/* mangaSync 浅色主题（基于 Element Plus 浅色 css-vars）
+   主色板：页面底 #f5f6f8（白偏灰）/ 卡片纯白 / 文字深灰。
+   除本文件与少数结构性色块外，组件里不再出现硬编码颜色。 */
 
 :root {
-  --ms-bg: #14161b;
-  --ms-bg-soft: #1b1e25;
-  --ms-panel: #1f232b;
-  --ms-border: #2c313b;
-  --ms-text: #e6e8ee;
-  --ms-text-dim: #9aa3b2;
-  --ms-accent: #6da8ff;
+  /* ---- ms 语义色 ---- */
+  --ms-bg: #f5f6f8;          /* 页面底色：白偏灰 */
+  --ms-bg-soft: #fafbfc;     /* 次级面板 / 卡片内区块 */
+  --ms-panel: #ffffff;       /* 卡片、面板：纯白 */
+  --ms-border: #e6e8eb;      /* 常规描边 */
+  --ms-border-strong: #d5d9de;
+  --ms-text: #1f2329;        /* 正文深灰 */
+  --ms-text-dim: #6b7280;    /* 次要文字 */
+  --ms-accent: #2f6fed;      /* 链接 / 强调（与 --el-color-primary 一致） */
   --ms-radius: 10px;
-}
+  --ms-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 2px 6px rgba(16, 24, 40, 0.05);
+  --ms-shadow-hover: 0 4px 14px rgba(16, 24, 40, 0.1);
+  --ms-overlay: rgba(255, 255, 255, 0.96);
 
-html.dark {
-  --el-bg-color: var(--ms-bg);
+  /* ---- Element Plus 主色（含派生浅色，保证 hover/plain 状态一致） ---- */
+  --el-color-primary: #2f6fed;
+  --el-color-primary-light-3: #6b9bf4;
+  --el-color-primary-light-5: #9abaf7;
+  --el-color-primary-light-7: #c8d9fb;
+  --el-color-primary-light-8: #dfe9fd;
+  --el-color-primary-light-9: #eff4fe;
+  --el-color-primary-dark-2: #2559c4;
+
+  /* ---- Element Plus 浅色底/边/字 ---- */
+  --el-bg-color: var(--ms-panel);
   --el-bg-color-page: var(--ms-bg);
   --el-bg-color-overlay: var(--ms-panel);
   --el-border-color: var(--ms-border);
   --el-border-color-light: var(--ms-border);
   --el-border-color-lighter: var(--ms-border);
-  --el-fill-color-blank: var(--ms-bg-soft);
+  --el-fill-color-blank: var(--ms-panel);
+  --el-fill-color-light: #f5f7fa;
   --el-text-color-primary: var(--ms-text);
-  --el-text-color-regular: #c6cbd6;
-  --el-color-primary: #409eff;
+  --el-text-color-regular: #4b5563;
+  --el-text-color-secondary: #6b7280;
 }
 
 * {
@@ -55,6 +71,7 @@ a {
   background: var(--ms-panel);
   border: 1px solid var(--ms-border);
   border-radius: var(--ms-radius);
+  box-shadow: var(--ms-shadow);
   padding: 16px;
 }
 
@@ -131,15 +148,17 @@ a {
   position: relative;
   display: flex;
   flex-direction: column;
-  background: var(--ms-bg-soft);
+  background: var(--ms-panel);
   border: 1px solid var(--ms-border);
   border-radius: var(--ms-radius);
+  box-shadow: var(--ms-shadow);
   overflow: hidden;
-  transition: border-color 0.15s, transform 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
 }
 
 .ms-comic:hover {
-  border-color: #3d4552;
+  border-color: var(--el-color-primary-light-5);
+  box-shadow: var(--ms-shadow-hover);
   transform: translateY(-2px);
 }
 
@@ -152,7 +171,7 @@ a {
   position: relative;
   width: 100%;
   aspect-ratio: 3 / 4;
-  background: #101216;
+  background: #f2f3f5;
   overflow: hidden;
 }
 
@@ -226,6 +245,12 @@ a {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.ms-stat.clickable:hover {
+  background: var(--el-color-primary-light-9);
+  border-color: var(--el-color-primary-light-7);
 }
 
 .ms-stat .label {
@@ -608,8 +633,9 @@ a {
   align-items: center;
   gap: 8px;
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
-  background: rgba(23, 26, 32, 0.97);
+  background: var(--ms-overlay);
   border-top: 1px solid var(--ms-border);
+  box-shadow: 0 -2px 12px rgba(16, 24, 40, 0.06);
   backdrop-filter: blur(8px);
 }
 

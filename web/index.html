@@ -1,23 +1,23 @@
 <!DOCTYPE html>
-<html lang="zh-CN" class="dark">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light" />
     <title>mangaSync · 漫画同步</title>
     <style>
       /* 首屏占位：穿透/公网带宽小，加载较慢时不要白屏 */
-      html, body { margin: 0; background: #141414; color: #c8c8c8; }
+      html, body { margin: 0; background: #f5f6f8; color: #1f2329; }
       #loading {
         height: 100vh; display: flex; flex-direction: column;
         align-items: center; justify-content: center; gap: 14px;
         font: 14px/1.6 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
       }
       #loading .dot {
-        width: 26px; height: 26px; border: 2px solid #4a4a4a;
-        border-top-color: #79bbff; border-radius: 50%; animation: spin 0.9s linear infinite;
+        width: 26px; height: 26px; border: 2px solid #dfe3e8;
+        border-top-color: #2f6fed; border-radius: 50%; animation: spin 0.9s linear infinite;
       }
-      #loading .tip { color: #7a7a7a; font-size: 12px; }
+      #loading .tip { color: #8b95a1; font-size: 12px; }
       @keyframes spin { to { transform: rotate(360deg); } }
     </style>
   </head>

@@ -4,16 +4,12 @@ import ElementPlus from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 
+/* mangaSync 浅色主题：脚本不再注入暗色类，Element Plus 使用默认浅色 css-vars */
 import 'element-plus/dist/index.css'
-// 暗色主题变量（配合 html.dark）
-import 'element-plus/theme-chalk/dark/css-vars.css'
 import '@/styles/theme.css'
 
 import App from '@/App.vue'
 import router from '@/router'
-
-// 全站暗色
-document.documentElement.classList.add('dark')
 
 const app = createApp(App)
 

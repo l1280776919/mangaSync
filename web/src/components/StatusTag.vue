@@ -13,7 +13,7 @@ const props = defineProps({
   label: { type: String, default: '' },
   type: { type: String, default: '' },
   size: { type: String, default: 'small' },
-  effect: { type: String, default: 'dark' }
+  effect: { type: String, default: 'light' }
 })
 
 const meta = computed(() => {

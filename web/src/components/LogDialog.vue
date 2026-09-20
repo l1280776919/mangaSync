@@ -127,7 +127,7 @@ const levelClass = (lv) => {
 }
 
 .log-box {
-  background: #0f1116;
+  background: #fafbfc;
   border: 1px solid var(--ms-border);
   border-radius: 8px;
   padding: 8px 10px;
@@ -140,12 +140,12 @@ const levelClass = (lv) => {
   display: flex;
   gap: 8px;
   padding: 2px 0;
-  border-bottom: 1px dashed rgba(255, 255, 255, 0.04);
+  border-bottom: 1px dashed rgba(17, 24, 39, 0.07);
   align-items: flex-start;
 }
 
 .ts {
-  color: #6b7686;
+  color: #8b95a1;
   flex-shrink: 0;
 }
 
@@ -155,19 +155,19 @@ const levelClass = (lv) => {
 }
 
 .lv-info {
-  color: #6da8ff;
+  color: #2563eb;
 }
 
 .lv-warn {
-  color: #e6a23c;
+  color: #b45309;
 }
 
 .lv-error {
-  color: #f56c6c;
+  color: #dc2626;
 }
 
 .lv-debug {
-  color: #8b949e;
+  color: #6b7280;
 }
 
 .msg {

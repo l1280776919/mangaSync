@@ -16,7 +16,8 @@ const loggingOut = ref(false)
 
 /** 登录 / 首改密码页是独立整屏页，不套侧边栏外壳 */
 const AUTH_PAGES = ['/login', '/change-password']
-const isAuthPage = computed(() => AUTH_PAGES.includes(route.path))
+/** 裸页面：登录/改密/在线阅读器 —— 整屏渲染，不套侧边栏 */
+const isAuthPage = computed(() => route.meta?.bare === true || AUTH_PAGES.includes(route.path))
 const username = computed(() => auth.user?.username || '未登录')
 
 // 导航顺序显式声明（router.getRoutes() 的顺序不可靠）
@@ -188,7 +189,7 @@ onMounted(async () => {
           <span class="header-title">{{ pageTitle }}</span>
         </div>
         <div class="header-right">
-          <el-tag :type="sseTag.type" size="small" effect="dark" class="sse-tag">
+          <el-tag :type="sseTag.type" size="small" effect="light" class="sse-tag">
             {{ sseTag.text }}
           </el-tag>
           <el-tooltip v-if="runningCount" :content="`${runningCount} 个任务进行中`">
@@ -225,7 +226,7 @@ onMounted(async () => {
 .app-aside {
   display: flex;
   flex-direction: column;
-  background: #171a20;
+  background: var(--ms-panel);
   border-right: 1px solid var(--ms-border);
   padding: 0;
 }
@@ -238,7 +239,7 @@ onMounted(async () => {
   font-size: 16px;
   font-weight: 700;
   letter-spacing: 0.3px;
-  color: #fff;
+  color: var(--ms-text);
 }
 
 .app-menu {
@@ -249,11 +250,14 @@ onMounted(async () => {
 
 .app-menu :deep(.el-menu-item) {
   height: 46px;
+  margin: 2px 8px;
+  border-radius: 8px;
 }
 
 .app-menu :deep(.el-menu-item.is-active) {
-  background: rgba(64, 158, 255, 0.14);
-  border-right: 3px solid var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  font-weight: 600;
 }
 
 .menu-badge {
@@ -305,8 +309,9 @@ onMounted(async () => {
   gap: 12px;
   height: 56px;
   padding: 0 16px;
-  background: #171a20;
+  background: var(--ms-panel);
   border-bottom: 1px solid var(--ms-border);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
 }
 
 .header-left {
@@ -369,6 +374,11 @@ onMounted(async () => {
   padding: 0;
   display: flex;
   flex-direction: column;
-  background: #171a20;
+  background: var(--ms-panel);
+}
+
+.nav-drawer .el-menu-item.is-active {
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
 }
 </style>

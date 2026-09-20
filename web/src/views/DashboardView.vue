@@ -122,8 +122,8 @@ const shortcuts = [
           <span class="ms-sub">· 后端 /api/stats</span>
         </span>
         <div class="title-actions">
-          <el-tag v-if="store.sseConnected" type="success" size="small" effect="dark">实时推送中</el-tag>
-          <el-tag v-else type="warning" size="small" effect="dark">SSE 断开（已降级轮询）</el-tag>
+          <el-tag v-if="store.sseConnected" type="success" size="small" effect="light">实时推送中</el-tag>
+          <el-tag v-else type="warning" size="small" effect="light">SSE 断开（已降级轮询）</el-tag>
           <el-button size="small" :loading="loadingStats" @click="reload">刷新数据</el-button>
           <el-button size="small" text type="primary" @click="store.reconnectEvents()">重连推送</el-button>
         </div>
@@ -132,9 +132,9 @@ const shortcuts = [
       <div v-loading="loadingStats" class="ms-stat-grid">
         <StatCard label="账号数" :value="stats?.accounts ?? '—'" icon="User" sub="已绑定源账号" clickable @click="router.push('/accounts')" />
         <StatCard label="收藏数" :value="stats?.favorites ?? '—'" icon="Star" sub="所有账号收藏合计" clickable @click="router.push('/favorites')" />
-        <StatCard label="下载中" :value="dl.running ?? '—'" icon="Loading" color="#409eff" :sub="`排队 ${dl.queued ?? 0} 个`" clickable @click="router.push('/downloads')" />
-        <StatCard label="已完成" :value="dl.done ?? '—'" icon="CircleCheck" color="#67c23a" sub="累计完成任务" clickable @click="router.push('/downloads')" />
-        <StatCard label="失败" :value="dl.failed ?? '—'" icon="CircleClose" color="#f56c6c" sub="可重试" clickable @click="router.push('/downloads')" />
+        <StatCard label="下载中" :value="dl.running ?? '—'" icon="Loading" color="#2f6fed" :sub="`排队 ${dl.queued ?? 0} 个`" clickable @click="router.push('/downloads')" />
+        <StatCard label="已完成" :value="dl.done ?? '—'" icon="CircleCheck" color="#16a34a" sub="累计完成任务" clickable @click="router.push('/downloads')" />
+        <StatCard label="失败" :value="dl.failed ?? '—'" icon="CircleClose" color="#dc2626" sub="可重试" clickable @click="router.push('/downloads')" />
         <StatCard
           label="漫画库大小"
           :value="formatBytes(lib.bytes)"

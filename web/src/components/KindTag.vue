@@ -15,7 +15,7 @@ const meta = map[props.kind] || { label: KIND_LABEL[props.kind] || props.kind ||
 </script>
 
 <template>
-  <el-tag :type="meta.type" :size="size" effect="dark" class="kind-tag">{{ meta.label }}</el-tag>
+  <el-tag :type="meta.type" :size="size" effect="light" class="kind-tag">{{ meta.label }}</el-tag>
 </template>
 
 <style scoped>

@@ -196,7 +196,7 @@ const quickKeywords = ['同人', '短篇', '中文', '单行本']
             v-if="collectedIds.includes(String(item.comicId))"
             size="small"
             type="success"
-            effect="dark"
+            effect="light"
           >
             已收藏
           </el-tag>

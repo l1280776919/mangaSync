@@ -168,10 +168,10 @@ function elapsedText(row) {
         <span class="ms-sub">· 共 {{ total }} 条，进行中 {{ activeCount }} 个</span>
       </span>
       <div class="head-actions">
-        <el-tag v-if="store.sseConnected" type="success" size="small" effect="dark">
+        <el-tag v-if="store.sseConnected" type="success" size="small" effect="light">
           实时推送（EventSource /api/events）
         </el-tag>
-        <el-tag v-else type="warning" size="small" effect="dark">SSE 断开，已降级为轮询</el-tag>
+        <el-tag v-else type="warning" size="small" effect="light">SSE 断开，已降级为轮询</el-tag>
         <el-tooltip content="SSE 掉线时用轮询兜底，重连成功后自动恢复推送">
           <el-switch v-model="autoRefresh" size="small" active-text="自动刷新" />
         </el-tooltip>

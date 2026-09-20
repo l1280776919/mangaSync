@@ -63,7 +63,7 @@ function onLoad() {
   position: relative;
   width: 100%;
   height: 100%;
-  background: #101216;
+  background: #f2f3f5;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -85,13 +85,13 @@ function onLoad() {
   gap: 6px;
   width: 100%;
   height: 100%;
-  color: #5b6472;
+  color: #9aa3ad;
   background: repeating-linear-gradient(
     45deg,
-    #14171c,
-    #14171c 8px,
-    #171b21 8px,
-    #171b21 16px
+    #f2f4f6,
+    #f2f4f6 8px,
+    #f8f9fb 8px,
+    #f8f9fb 16px
   );
   padding: 8px;
   text-align: center;
@@ -113,7 +113,7 @@ function onLoad() {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #6b7686;
-  background: rgba(16, 18, 22, 0.45);
+  color: #8b95a1;
+  background: rgba(255, 255, 255, 0.6);
 }
 </style>

@@ -241,8 +241,8 @@ onMounted(async () => {
         <span class="ms-sub">· /api/auth/me · /api/auth/password · /api/auth/logout</span>
       </span>
       <div class="head-actions">
-        <el-tag size="small" effect="dark" type="info">{{ accountName }}</el-tag>
-        <el-tag v-if="account?.isAdmin" size="small" effect="dark" type="warning">管理员</el-tag>
+        <el-tag size="small" effect="light" type="info">{{ accountName }}</el-tag>
+        <el-tag v-if="account?.isAdmin" size="small" effect="light" type="warning">管理员</el-tag>
         <el-button size="small" :loading="loggingOut" @click="onLogout">退出登录</el-button>
       </div>
     </div>
@@ -330,10 +330,10 @@ onMounted(async () => {
         <span class="ms-sub">· GET / PUT /api/settings</span>
       </span>
       <div class="head-actions">
-        <el-tag v-if="health" type="success" size="small" effect="dark">
+        <el-tag v-if="health" type="success" size="small" effect="light">
           后端正常 · v{{ health.version }} · 运行 {{ Math.floor((health.uptimeSec || 0) / 60) }} 分
         </el-tag>
-        <el-tag v-else type="info" size="small" effect="dark">后端状态未知</el-tag>
+        <el-tag v-else type="info" size="small" effect="light">后端状态未知</el-tag>
         <el-button size="small" :loading="loading" @click="load">重新读取</el-button>
       </div>
     </div>
