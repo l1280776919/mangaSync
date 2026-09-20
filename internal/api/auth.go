@@ -182,7 +182,7 @@ func (s *Server) authPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := auth.CheckPassword(in.NewPassword); err != nil {
-		writeErr(w, 400, err.Error())
+		writeErr(w, 400, "%s", err.Error())
 		return
 	}
 	if in.NewPassword == in.OldPassword {
