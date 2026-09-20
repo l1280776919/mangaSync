@@ -1,12 +1,20 @@
 <script setup>
+import {
+  Reading,
+  Download,
+  MoreFilled,
+  Tickets,
+  Star,
+  Delete,
+  Document,
+  Picture,
+  Coin,
+  EditPen
+} from '@element-plus/icons-vue'
 import CoverImage from '@/components/CoverImage.vue'
 import KindTag from '@/components/KindTag.vue'
 import { downloadStateOf, formatBytes, formatTime } from '@/utils/format'
 
-/**
- * 漫画卡片（收藏 / 搜索结果通用）。
- * 只负责展示 + 抛事件，具体动作由父级实现。
- */
 const props = defineProps({
   item: { type: Object, required: true },
   selectable: { type: Boolean, default: false },
@@ -25,6 +33,14 @@ const props = defineProps({
 const emit = defineEmits(['download', 'queue', 'collect', 'uncollect', 'toggle', 'open', 'read'])
 
 const dl = () => downloadStateOf(props.item)
+
+function handleCmd(cmd) {
+  if (cmd === 'queue') emit('queue', props.item)
+  else if (cmd === 'collect') emit('collect', props.item)
+  else if (cmd === 'uncollect') emit('uncollect', props.item)
+  else if (cmd === 'read') emit('read', props.item)
+  else if (cmd === 'download') emit('download', props.item)
+}
 </script>
 
 <template>
@@ -43,15 +59,19 @@ const dl = () => downloadStateOf(props.item)
         <slot name="badge" />
         <KindTag :kind="item.kind" />
       </div>
+      <div v-if="readable" class="cover-quick-read" @click.stop="emit('read', item)">
+        <el-icon :size="15"><Reading /></el-icon>
+        <span>立即阅读</span>
+      </div>
     </div>
 
     <div class="ms-comic-body">
       <div class="ms-comic-title" :title="item.title" @click="emit('open', item)">
         {{ item.title || '未命名' }}
       </div>
-      <div class="ms-comic-meta" :title="item.author">
+      <div class="ms-comic-meta author-meta" :title="item.author">
         <el-icon :size="11"><EditPen /></el-icon>
-        {{ item.author || '未知作者' }}
+        <span>{{ item.author || '未知作者' }}</span>
       </div>
 
       <div class="tags-row">
@@ -103,57 +123,132 @@ const dl = () => downloadStateOf(props.item)
         {{ item.localPath }}
       </div>
 
-      <div class="ms-comic-actions">
+      <!-- 优化后的按钮栏：主次分明、绝对底端平齐、绝不换行错位 -->
+      <div class="ms-comic-actions card-action-bar">
+        <!-- 按钮 1：若可读显示阅读，否则若可收藏显示收藏，否则显示整本下载 -->
         <el-button
           v-if="readable"
           size="small"
-          type="success"
-          plain
+          type="primary"
+          class="flex-btn"
           @click.stop="emit('read', item)"
         >
-          阅读
+          <el-icon :size="12"><Reading /></el-icon>
+          <span>阅读</span>
         </el-button>
+
+        <!-- 按钮 2：下载整本 -->
         <el-button
           v-if="showDownload"
           size="small"
-          type="primary"
+          :type="readable ? 'default' : 'primary'"
+          class="flex-btn"
           :loading="busy"
           @click.stop="emit('download', item)"
         >
-          下载
+          <el-icon :size="12"><Download /></el-icon>
+          <span>下载</span>
         </el-button>
+
+        <!-- 搜索页专用的收藏按钮 -->
         <el-button
-          v-if="showDownload"
-          size="small"
-          :disabled="busy"
-          @click.stop="emit('queue', item)"
-        >
-          加入队列
-        </el-button>
-        <el-button
-          v-if="showCollect"
+          v-if="showCollect && !showDownload && !readable"
           size="small"
           type="success"
-          plain
+          class="flex-btn"
           @click.stop="emit('collect', item)"
         >
-          收藏
+          <el-icon :size="12"><Star /></el-icon>
+          <span>收藏</span>
         </el-button>
-        <el-button
-          v-if="favorited"
-          size="small"
-          type="danger"
-          plain
-          @click.stop="emit('uncollect', item)"
+
+        <!-- 更多操作下拉（选章、取消收藏等） -->
+        <el-dropdown
+          v-if="showDownload || favorited || showCollect"
+          trigger="click"
+          @command="handleCmd"
         >
-          取消收藏
-        </el-button>
+          <el-button size="small" class="more-icon-btn">
+            <el-icon :size="13"><MoreFilled /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-if="showDownload" command="queue">
+                <el-icon><Tickets /></el-icon> 选章加入队列
+              </el-dropdown-item>
+              <el-dropdown-item v-if="showCollect" command="collect">
+                <el-icon><Star /></el-icon> 加入收藏
+              </el-dropdown-item>
+              <el-dropdown-item
+                v-if="favorited"
+                command="uncollect"
+                divided
+                style="color: var(--el-color-danger)"
+              >
+                <el-icon><Delete /></el-icon> 取消收藏
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
+.ms-comic {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.ms-comic-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.ms-comic-title {
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.ms-comic-title:hover {
+  color: var(--el-color-primary);
+}
+
+.author-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cover-quick-read {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 8px 0;
+  background: linear-gradient(to top, rgba(15, 23, 42, 0.88), transparent);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.ms-comic:hover .cover-quick-read {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .tags-row {
   display: flex;
   flex-wrap: wrap;
@@ -195,5 +290,35 @@ const dl = () => downloadStateOf(props.item)
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 10px;
+}
+
+/* 按钮栏底端对齐与防错位 */
+.card-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+.flex-btn {
+  flex: 1;
+  min-width: 0;
+  margin-left: 0 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 4px;
+}
+
+.more-icon-btn {
+  flex: 0 0 32px !important;
+  width: 32px;
+  padding: 0;
+  margin-left: 0 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 </style>

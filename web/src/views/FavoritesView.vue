@@ -369,14 +369,16 @@ watch(
       <el-table-column label="大小" width="90">
         <template #default="{ row }">{{ formatBytes(row.bytes) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="280" fixed="right">
+      <el-table-column label="操作" width="310" fixed="right">
         <template #default="{ row }">
-          <el-button size="small" type="success" plain @click="read(row)">阅读</el-button>
-          <el-button size="small" type="primary" :loading="isBusy(row)" @click="download(row)">下载</el-button>
-          <el-button size="small" @click="openPicker(row)">加入队列</el-button>
-          <el-button size="small" type="danger" plain :loading="removingId === String(row.comicId)" @click="removeFavorite(row)">
-            取消收藏
-          </el-button>
+          <div class="fav-table-actions">
+            <el-button size="small" type="primary" plain @click="read(row)">阅读</el-button>
+            <el-button size="small" type="primary" :loading="isBusy(row)" @click="download(row)">下载</el-button>
+            <el-button size="small" @click="openPicker(row)">队列</el-button>
+            <el-button size="small" type="danger" plain :loading="removingId === String(row.comicId)" @click="removeFavorite(row)">
+              移除
+            </el-button>
+          </div>
         </template>
       </el-table-column>
     </el-table>
@@ -485,5 +487,16 @@ watch(
   .acct-select {
     width: 100%;
   }
+}
+
+.fav-table-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.fav-table-actions :deep(.el-button) {
+  margin-left: 0 !important;
 }
 </style>
