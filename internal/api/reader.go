@@ -2,12 +2,18 @@ package api
 
 import (
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+
+	_ "golang.org/x/image/webp"
 
 	"github.com/l1280776919/mangaSync/internal/store"
 )
@@ -36,9 +42,15 @@ func (s *Server) readerMeta(w http.ResponseWriter, r *http.Request) {
 			resp["pages"] = len(files)
 			resp["local"] = true
 			resp["dir"] = dir
+			resp["sizes"] = sizesOf(files)
 			writeJSON(w, 200, resp)
 			return
 		}
+	}
+
+	// 阅读器缓存：本地没有但缓存过，也能给出像素尺寸（前端可精确占位）
+	if sizes := s.cachedSizes(kind, comicID, order); len(sizes) > 0 {
+		resp["sizes"] = sizes
 	}
 
 	src, err := s.eng.SourceFor(kind)
@@ -164,6 +176,71 @@ func (s *Server) localChapterDir(kind, comicID string, order int) (string, bool)
 
 // readerImgExts 可当作漫画页的扩展名
 var readerImgExts = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true, ".avif": true, ".bmp": true}
+
+// sizesOf 读取每张图的像素尺寸（读不到写 {0,0}），顺序与 imageFilesIn 一致。
+// 前端用它给未加载的页预留占位高度，避免滚动时位置乱跳。
+func sizesOf(files []string) [][2]int {
+	out := make([][2]int, 0, len(files))
+	for _, p := range files {
+		w, h := imageSize(p)
+		out = append(out, [2]int{w, h})
+	}
+	return out
+}
+
+// cachedSizes 读阅读器缓存目录里各页的尺寸（按页号对齐，缺页为 {0,0}）
+func (s *Server) cachedSizes(kind, comicID string, order int) [][2]int {
+	dir := filepath.Join(s.base, "reader", kind, safeName(comicID), fmt.Sprintf("%03d", order))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	maxPage := 0
+	found := map[int][2]int{}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		ext := strings.ToLower(filepath.Ext(name))
+		if !readerImgExts[ext] {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimSuffix(name, filepath.Ext(name)))
+		if err != nil || n < 1 {
+			continue
+		}
+		if n > maxPage {
+			maxPage = n
+		}
+		if _, ok := found[n]; !ok {
+			w, h := imageSize(filepath.Join(dir, name))
+			found[n] = [2]int{w, h}
+		}
+	}
+	if maxPage == 0 {
+		return nil
+	}
+	out := make([][2]int, maxPage)
+	for i := 1; i <= maxPage; i++ {
+		out[i-1] = found[i]
+	}
+	return out
+}
+
+// imageSize 只读图片头拿宽高（jpeg/png/gif/webp），失败返回 0,0
+func imageSize(p string) (int, int) {
+	f, err := os.Open(p)
+	if err != nil {
+		return 0, 0
+	}
+	defer f.Close()
+	cfg, _, err := image.DecodeConfig(f)
+	if err != nil {
+		return 0, 0
+	}
+	return cfg.Width, cfg.Height
+}
 
 // imageFilesIn 返回目录内图片文件（按名字排序，页码即序号）
 func imageFilesIn(dir string) []string {
