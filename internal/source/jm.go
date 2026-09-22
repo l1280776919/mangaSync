@@ -436,7 +436,10 @@ type jmAlbum struct {
 	Tags        []jmTag        `json:"tags"`
 	Series      []jmSeriesItem `json:"series"`
 	IsFavorite  bool           `json:"is_favorite"`
-	Works       []jmCategory   `json:"works"`
+	// works 字段站点有时返回对象数组、有时返回字符串数组（2026-09-22 修：本子 461647
+	// 返回 ["..."] 导致 "cannot unmarshal string into jmAlbum.works.0" 整本详情失败），
+	// 且本字段目前未使用 → 原样收下即可。
+	Works json.RawMessage `json:"works"`
 }
 
 type jmSeriesItem struct {

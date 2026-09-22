@@ -24,7 +24,9 @@ const (
 )
 
 // jmSegNum 计算某张图被切成几段，0 表示没乱序、可原样保存。
-// 对齐 JmImageTool.get_num：先看本子 id 与 scramble_id 的关系，再按 md5(aid+文件名) 定段数。
+// 对齐站点 reader 的 get_num：key = md5(str(aid) + 页码)，页码取图片文件名
+// **去掉扩展名**的部分（00001.webp → "00001"）。用带扩展名的文件名做 key 会算出
+// 错误的段数（2026-09-22 修：1238381 的首页应为 16 段而旧代码算成 8 段，整本乱序错位）。
 func jmSegNum(scrambleID, aid int, filename string) int {
 	if aid < scrambleID {
 		return 0
@@ -36,7 +38,11 @@ func jmSegNum(scrambleID, aid int, filename string) int {
 	if aid < jmScramble421926 {
 		x = 10
 	}
-	sum := md5Hex(fmt.Sprintf("%d%s", aid, filename))
+	page := filename
+	if i := strings.IndexByte(page, '.'); i > 0 {
+		page = page[:i]
+	}
+	sum := md5Hex(fmt.Sprintf("%d%s", aid, page))
 	return int(sum[len(sum)-1])%x*2 + 2
 }
 
