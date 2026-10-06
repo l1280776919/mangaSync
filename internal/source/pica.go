@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -917,17 +918,50 @@ var (
 	reSpaces   = regexp.MustCompile(`\s+`)
 )
 
+// sanitize 清洗文件名：替换非法字符、压缩空白，并限制长度。
+//
+// ⚠️ 截断必须按「字符」而不是「字节」：Go 的 s[:n] 是字节切片，会把日文等多字节
+// 字符切成半个，产生**非法 UTF-8** 的文件名。2026-10-06 实测事故：本子 1470486 的目录
+// 被截成 120 字节的坏名（`\udce3` 之类），与正常完整名目录并存 → 扫描时按两个目录处理，
+// 空的那个还被 `complete` 逻辑当成「已完成」，于是定时同步每天重复派发同一本。
 func sanitize(name string, maxLen int) string {
 	s := reBadChars.ReplaceAllString(name, "_")
 	s = reSpaces.ReplaceAllString(s, " ")
 	s = strings.Trim(s, " .")
-	if len(s) > maxLen {
-		s = strings.TrimSpace(s[:maxLen])
+	if maxLen > 0 {
+		s = truncRunes(s, maxLen)
 	}
+	// 字节兜底：Linux 单文件名上限 255 字节，留余量给 id 前缀/后缀，且不切碎多字节字符
+	s = truncBytes(s, 200)
+	s = strings.TrimSpace(s)
 	if s == "" {
 		return "untitled"
 	}
 	return s
+}
+
+// truncRunes 按字符数截断（不会切碎多字节字符）
+func truncRunes(s string, n int) string {
+	if n <= 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
+}
+
+// truncBytes 按字节上限截断，并保证结果是合法 UTF-8
+func truncBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := s[:n]
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		cut = cut[:len(cut)-1]
+	}
+	return cut
 }
 
 // comicDir 决定漫画目录：标题重名（且不是同一本）时补 id 后缀

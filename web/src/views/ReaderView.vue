@@ -43,6 +43,9 @@
         <el-button v-if="!compact" size="small" class="rd-theme" :title="dark ? '浅色' : '深色'" @click="toggleDark">
           <el-icon><component :is="dark ? 'Sunny' : 'Moon'" /></el-icon>
         </el-button>
+        <el-button size="small" class="rd-fullscreen" :title="isFullscreen ? '退出全屏' : '全屏阅读'" @click="toggleFullscreen">
+          <el-icon><FullScreen /></el-icon>
+        </el-button>
 
         <el-dropdown v-if="compact" trigger="click" placement="bottom-end" @command="onCommand">
           <el-button size="small" class="rd-more" title="阅读设置">
@@ -73,10 +76,11 @@
       <div class="rd-pages">
         <div v-for="p in pageList" :key="p" class="rd-item" :data-page="p" :style="itemStyle(p)">
           <img
+            v-if="shouldRender(p)"
             :src="pageUrl(p)"
             :alt="'第 ' + p + ' 页'"
             decoding="async"
-            :loading="p <= 5 ? 'eager' : 'lazy'"
+            :loading="p <= 3 ? 'eager' : 'lazy'"
             :class="{ 'is-loaded': loaded[p] }"
             @load="onLoaded(p, $event)"
             @error="onError(p)"
@@ -144,6 +148,20 @@ let gen = 0
 
 const fit = ref(localStorage.getItem('ms-reader-fit') || 'width')
 const dark = ref(localStorage.getItem('ms-reader-dark') === '1')
+const isFullscreen = ref(!!document.fullscreenElement)
+const retriedTimes = reactive({})
+
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen?.().catch(() => {})
+  } else {
+    document.exitFullscreen?.().catch(() => {})
+  }
+}
+
+document.addEventListener('fullscreenchange', () => {
+  isFullscreen.value = !!document.fullscreenElement
+})
 const barVisible = ref(true)
 const page = ref(1)
 const scroller = ref(null)
@@ -151,6 +169,19 @@ const scroller = ref(null)
 /* 手机端判定：与全站断点一致（≤768px） */
 const isMobile = useIsMobile()
 const compact = isMobile
+
+/**
+ * 视口虚拟化渲染窗口（Windowing）：
+ * 彻底解决高分辨率 GIF 动图或超长画册几十张大图同时常驻 DOM 导致浏览器标签页显存/内存撑爆崩溃（Aw, Snap!）。
+ * 仅在视口附近挂载 <img>，视口外的通过精确 CSS 占位骨架撑起完整高度，滚动条平滑不跳动。
+ */
+const WINDOW_BEHIND = 6
+const WINDOW_AHEAD = 10
+
+function shouldRender(p) {
+  const cur = page.value || 1
+  return p >= cur - WINDOW_BEHIND && p <= cur + WINDOW_AHEAD
+}
 
 const DEFAULT_RATIO = '2 / 3' // 拿不到真实尺寸时的兜底比例（常见漫画页）
 
@@ -229,7 +260,11 @@ async function load() {
     meta.local = !!m.local
     // 后端返回的每页尺寸（[[w,h], ...]，缺页为 [0,0]）
     sizes.value = Array.isArray(m.sizes) ? m.sizes : []
-    if (!meta.pages) loadError.value = m.error || '这一章拿不到图片'
+    if (!meta.pages) {
+      loadError.value = m.error || '这一章拿不到图片'
+    } else {
+      nextTick(() => preload(page.value))
+    }
   } catch (e) {
     if (my !== gen) return
     loadError.value = e?.message || '加载失败'
@@ -291,7 +326,7 @@ function updateCurrentPage() {
  * - 有序调度：按离当前页的距离由近及远有序排队
  */
 const PRELOAD_AHEAD = 8
-const PRELOAD_BEHIND = 1
+const PRELOAD_BEHIND = 2
 const MAX_PRELOAD_CONCURRENCY = 2
 let activePreloadCount = 0
 let preloadQueue = []
@@ -306,21 +341,25 @@ function processPreloadQueue() {
     activePreloadCount++
     
     const im = new Image()
-    im.onload = () => {
+    const done = () => {
       activePreloadCount--
-      if (my === gen) {
-        delete preloading[pageNum]
-        // 仅记录真实像素尺寸，精确占位；DOM 真实图片的渲染状态交由 img 的 @load 触发
-        if (im.naturalWidth) natSize[pageNum] = [im.naturalWidth, im.naturalHeight]
-      }
+      im.onload = null
+      im.onerror = null
+      im.src = '' // 及时释放后台 Image 解码句柄，HTTP 响应已安全留存在浏览器缓存
       processPreloadQueue()
     }
+    im.onload = () => {
+      if (my === gen) {
+        delete preloading[pageNum]
+        if (im.naturalWidth) natSize[pageNum] = [im.naturalWidth, im.naturalHeight]
+      }
+      done()
+    }
     im.onerror = () => {
-      activePreloadCount--
       if (my === gen) {
         delete preloading[pageNum]
       }
-      processPreloadQueue()
+      done()
     }
     im.src = pageUrl(pageNum)
   }
@@ -351,6 +390,13 @@ function onLoaded(p, e) {
   if (im && im.naturalWidth) natSize[p] = [im.naturalWidth, im.naturalHeight]
 }
 function onError(p) {
+  if (!retriedTimes[p]) {
+    retriedTimes[p] = 1
+    setTimeout(() => {
+      retry(p)
+    }, 600)
+    return
+  }
   failed[p] = true
   delete loaded[p]
   preloading[p] = false

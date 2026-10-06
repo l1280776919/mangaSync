@@ -14,6 +14,9 @@
  * 与 @element-plus/icons-vue 的导出名取交集，共 32 个。
  */
 import {
+  FullScreen,
+  MoreFilled,
+  Delete,
   ArrowDown,
   ArrowLeft,
   ArrowRight,
@@ -49,6 +52,9 @@ import {
 } from '@element-plus/icons-vue'
 
 export const ICONS = {
+  FullScreen,
+  MoreFilled,
+  Delete,
   ArrowDown,
   ArrowLeft,
   ArrowRight,

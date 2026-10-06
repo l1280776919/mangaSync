@@ -312,6 +312,15 @@ func (e *Engine) runJob(ctx context.Context, j *store.Job) {
 			chapters = countChapterDirs(res.Path)
 		}
 		chaptersDone = countChapterDirs(res.Path)
+		// 单章本：图片直接放在本子目录下（没有章节目录），countChapterDirs 为 0。
+		// 不补偿的话「已完整」会被写成未完整 → 定时同步每天重复派发同一本、界面永远显示未完成
+		// （2026-10-06 实测：本子 1470486 已完整下载 28 张，却被标记 chapters_done=0/complete=0，连跑 6 天无用任务）。
+		if chaptersDone == 0 && imgs > 0 {
+			chaptersDone = 1
+			if chapters == 0 {
+				chapters = 1
+			}
+		}
 		_ = e.st.UpsertComic(&store.Comic{
 			Kind: j.Kind, ComicID: j.ComicID, Title: title, Path: res.Path,
 			Chapters: chapters, ChaptersDone: chaptersDone, Images: imgs, Bytes: bytes,

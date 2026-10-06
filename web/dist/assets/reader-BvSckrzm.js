@@ -1,0 +1,1 @@
+function d(n,t=1,c=""){const i=(n==null?void 0:n.kind)||c,e=(n==null?void 0:n.comicId)||(n==null?void 0:n.id);return!i||!e?null:`/reader/${i}/${encodeURIComponent(e)}/${t}`}function a(n,t=1,c=""){const i=d(n,t,c);if(!i)return;const e=window.location.origin+window.location.pathname+"#"+i;window.open(e,"_blank")}export{a as o};

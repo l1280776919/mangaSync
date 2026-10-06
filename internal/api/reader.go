@@ -82,22 +82,23 @@ func (s *Server) readerPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1) 本地已下载的图（零网络、秒开）
+	// 1) 本地已下载的图（零网络、秒开、支持条件请求 304 与内核零拷贝 sendfile）
 	if dir, ok := s.localChapterDir(kind, comicID, order); ok {
 		if files := imageFilesIn(dir); page <= len(files) {
-			if b, err := os.ReadFile(files[page-1]); err == nil && len(b) > 0 {
-				serveReaderImage(w, b, contentTypeByExt(files[page-1]))
+			target := files[page-1]
+			if fi, err := os.Stat(target); err == nil && !fi.IsDir() && fi.Size() > 0 {
+				serveCachedFile(w, r, target, fi)
 				return
 			}
 		}
 	}
 
-	// 2) 阅读器缓存（回源结果落盘，翻页/重看不再重复还原）
-	cacheDir := filepath.Join(s.base, "reader", kind, safeName(comicID), fmt.Sprintf("%03d", order))
+	// 2) 阅读器缓存（回源结果落盘，翻页/重看不再重复还原，支持条件请求 304）
+	cacheDir := s.readerCacheDir(kind, comicID, order)
 	for _, ext := range []string{"webp", "jpg", "png", "gif"} {
 		p := filepath.Join(cacheDir, fmt.Sprintf("%05d.%s", page, ext))
-		if b, err := os.ReadFile(p); err == nil && len(b) > 0 {
-			serveReaderImage(w, b, contentTypeByExt(p))
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Size() > 0 {
+			serveCachedFile(w, r, p, fi)
 			return
 		}
 	}
@@ -135,12 +136,28 @@ func (s *Server) readerPage(w http.ResponseWriter, r *http.Request) {
 	serveReaderImage(w, b, ct)
 }
 
+// serveCachedFile 送本地图片文件。
+//
+// 关键：漫画页是**可变内容**（重下会原地替换同名文件），所以不能发
+// `max-age=86400` 那种「一天内都是新鲜的」硬缓存 —— 浏览器会一直用旧图，
+// 表现成「服务端已经修好了，页面上还是错的」（2026-09-22 踩坑：乱序还原修好后，
+// 之前看过的十几页仍是旧图）。正确做法是发 `no-cache` + 强验证器（ETag=size-mtime，
+// 带文件 mtime 纳秒），让浏览器每次带 If-None-Match 来问：
+// 没变 → 304（无 body，仍然秒开）；变了（重下）→ 200 拿到新图。
+func serveCachedFile(w http.ResponseWriter, r *http.Request, path string, fi os.FileInfo) {
+	w.Header().Set("Cache-Control", "private, no-cache")
+	w.Header().Set("ETag", fmt.Sprintf(`"%x-%x"`, fi.Size(), fi.ModTime().UnixNano()))
+	http.ServeFile(w, r, path)
+}
+
 func serveReaderImage(w http.ResponseWriter, b []byte, ct string) {
 	if ct == "" {
 		ct = "image/jpeg"
 	}
 	w.Header().Set("Content-Type", ct)
-	w.Header().Set("Cache-Control", "private, max-age=86400")
+	// 回源结果：同样是可变内容，交给浏览器验证后再用（这里没有文件可做验证器，
+	// 落盘缓存成功的话下一次请求会走上面的 serveCachedFile 拿到 304）
+	w.Header().Set("Cache-Control", "private, no-cache")
 	w.Header().Set("Content-Length", strconv.Itoa(len(b)))
 	w.WriteHeader(200)
 	_, _ = w.Write(b)
@@ -188,9 +205,14 @@ func sizesOf(files []string) [][2]int {
 	return out
 }
 
+// readerCacheDir 阅读器回源缓存目录（未下载的章节回源后落盘在这里）
+func (s *Server) readerCacheDir(kind, comicID string, order int) string {
+	return filepath.Join(s.base, "reader", kind, safeName(comicID), fmt.Sprintf("%03d", order))
+}
+
 // cachedSizes 读阅读器缓存目录里各页的尺寸（按页号对齐，缺页为 {0,0}）
 func (s *Server) cachedSizes(kind, comicID string, order int) [][2]int {
-	dir := filepath.Join(s.base, "reader", kind, safeName(comicID), fmt.Sprintf("%03d", order))
+	dir := s.readerCacheDir(kind, comicID, order)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil

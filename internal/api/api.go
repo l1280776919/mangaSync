@@ -507,8 +507,9 @@ func (s *Server) bestCred(acc *store.Account, kind string) *source.Cred {
 func (s *Server) comicCover(w http.ResponseWriter, r *http.Request) {
 	kind, comicID := r.PathValue("kind"), r.PathValue("comicId")
 	cachePath := filepath.Join(s.base, "covers", fmt.Sprintf("%s_%s.jpg", kind, safeName(comicID)))
-	if b, err := os.ReadFile(cachePath); err == nil && len(b) > 0 {
-		serveImage(w, b)
+	if fi, err := os.Stat(cachePath); err == nil && !fi.IsDir() && fi.Size() > 0 {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		http.ServeFile(w, r, cachePath)
 		return
 	}
 	src, err := s.eng.SourceFor(kind)
@@ -528,7 +529,8 @@ func (s *Server) comicCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = os.WriteFile(cachePath, b, 0o644)
-	serveImage(w, b)
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	http.ServeFile(w, r, cachePath)
 }
 
 func serveImage(w http.ResponseWriter, b []byte) {

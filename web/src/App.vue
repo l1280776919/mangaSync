@@ -47,12 +47,7 @@ const runningCount = computed(
   () => store.jobList.filter((j) => j.status === 'running' || j.status === 'queued').length
 )
 
-const sseTag = computed(() => {
-  if (store.sseConnected) return { type: 'success', text: '实时推送' }
-  if (store.sseStatus === 'connecting') return { type: 'info', text: '连接中…' }
-  if (store.sseStatus === 'offline') return { type: 'warning', text: '轮询模式' }
-  return { type: 'info', text: '未连接' }
-})
+
 
 watch(isMobile, (m) => {
   if (!m) drawerOpen.value = false
@@ -82,9 +77,9 @@ function bootstrap() {
 
 watch(
   () => route.path,
-  (path) => {
+  () => {
     drawerOpen.value = false
-    if (AUTH_PAGES.includes(path)) {
+    if (isAuthPage.value) {
       store.stopEvents()
     } else {
       bootstrap()
@@ -206,9 +201,7 @@ onMounted(async () => {
           <span class="header-title">{{ pageTitle }}</span>
         </div>
         <div class="header-right">
-          <el-tag :type="sseTag.type" size="small" effect="light" class="sse-tag">
-            {{ sseTag.text }}
-          </el-tag>
+
           <el-tooltip v-if="runningCount" :content="`${runningCount} 个任务进行中`">
             <el-button text @click="go('/downloads')">
               <el-icon>
