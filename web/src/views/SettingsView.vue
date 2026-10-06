@@ -258,25 +258,12 @@ watch(
 </script>
 
 <template>
-  <div class="ms-panel">
-    <div class="ms-panel-title">网络诊断（本次运行）<el-button @click="loadDiagnostics">刷新诊断</el-button></div>
-    <el-alert v-if="diagnosticsError" :title="diagnosticsError" type="error" :closable="false" />
-    <el-table v-if="diagnostics" :data="diagnostics.network" empty-text="暂无上游请求">
-      <el-table-column prop="host" label="站点" min-width="180" />
-      <el-table-column prop="requests" label="请求数" />
-      <el-table-column prop="failures" label="HTTP / 网络失败" />
-      <el-table-column prop="averageMs" label="平均响应头耗时 ms" />
-      <el-table-column prop="lastStatus" label="最近 HTTP 状态" />
-      <el-table-column prop="lastErrorKind" label="错误类型" />
-    </el-table>
-    <p class="ms-dim">凭据已加密保存。数据备份与 secrets.key 密钥应分开保管；恢复会校验备份并使旧登录会话失效。</p>
-  </div>
   <!-- 账号安全：登录态 + 内嵌改密 + 登出（旧的 authUser/authPass「访问控制」已随 Basic 认证一并移除） -->
   <div class="ms-panel">
     <div class="ms-panel-title">
       <span>
         账号安全
-        <span class="ms-sub">· /api/auth/me · /api/auth/password · /api/auth/logout</span>
+        <span class="ms-sub">· 登录与密码管理</span>
       </span>
       <div class="head-actions">
         <el-tag size="small" effect="light" type="info">{{ accountName }}</el-tag>
@@ -365,7 +352,7 @@ watch(
     <div class="ms-panel-title">
       <span>
         系统设置
-        <span class="ms-sub">· GET / PUT /api/settings</span>
+        <span class="ms-sub">· 存储、下载与同步</span>
       </span>
       <div class="head-actions">
         <el-tag v-if="health" type="success" size="small" effect="light">
@@ -495,6 +482,19 @@ watch(
         sub="<数据目录>/cache/covers/"
       />
     </div>
+  </div>
+  <div class="ms-panel">
+    <div class="ms-panel-title">网络诊断（本次运行）<el-button @click="loadDiagnostics">刷新诊断</el-button></div>
+    <el-alert v-if="diagnosticsError" :title="diagnosticsError" type="error" :closable="false" />
+    <el-table v-if="diagnostics" :data="diagnostics.network" empty-text="暂无上游请求">
+      <el-table-column prop="host" label="站点" min-width="180" />
+      <el-table-column prop="requests" label="请求数" />
+      <el-table-column prop="failures" label="HTTP / 网络失败" />
+      <el-table-column prop="averageMs" label="平均响应头耗时 ms" />
+      <el-table-column prop="lastStatus" label="最近 HTTP 状态" />
+      <el-table-column prop="lastErrorKind" label="错误类型" />
+    </el-table>
+    <p class="ms-dim">凭据已加密保存。数据备份与 secrets.key 密钥应分开保管；恢复会校验备份并使旧登录会话失效。</p>
   </div>
 </template>
 

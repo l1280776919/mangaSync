@@ -173,7 +173,7 @@ async function onLogout() {
 <style scoped>
 /* 强制改密页：与登录页同款柔和浅色渐变底 */
 .auth-page {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -186,7 +186,7 @@ async function onLogout() {
   max-width: 400px;
   background: var(--ms-panel);
   border: 1px solid var(--ms-border);
-  border-radius: 14px;
+  border-radius: 18px;
   box-shadow: 0 8px 30px rgba(16, 24, 40, 0.08);
 }
 
@@ -202,7 +202,7 @@ async function onLogout() {
 }
 
 .auth-title {
-  font-size: 18px;
+  font-size: 22px;
   font-weight: 700;
 }
 

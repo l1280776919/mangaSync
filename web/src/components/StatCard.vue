@@ -22,6 +22,7 @@ const emit = defineEmits(['click'])
     :role="clickable ? 'button' : undefined"
     :tabindex="clickable ? 0 : undefined"
     @keyup.enter="clickable && emit('click')"
+    @keydown.space.prevent="clickable && emit('click')"
   >
     <div class="stat-top">
       <span class="label">{{ label }}</span>
@@ -31,7 +32,7 @@ const emit = defineEmits(['click'])
         </el-icon>
       </div>
     </div>
-    <div class="value" :style="color ? { color } : {}">{{ value }}</div>
+    <div class="value" :style="label === '失败' && Number(value) > 0 ? { color } : {}">{{ value }}</div>
     <div v-if="sub" class="sub ms-dim" :title="sub">{{ sub }}</div>
   </div>
 </template>

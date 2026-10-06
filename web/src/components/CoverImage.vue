@@ -85,14 +85,8 @@ function onLoad() {
   gap: 6px;
   width: 100%;
   height: 100%;
-  color: #9aa3ad;
-  background: repeating-linear-gradient(
-    45deg,
-    #f2f4f6,
-    #f2f4f6 8px,
-    #f8f9fb 8px,
-    #f8f9fb 16px
-  );
+  color: #74849a;
+  background: #edf1f5;
   padding: 8px;
   text-align: center;
 }

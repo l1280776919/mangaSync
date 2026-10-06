@@ -190,12 +190,13 @@ watch(
 </script>
 
 <template>
-  <div class="ms-panel" :class="{ 'ms-has-mbar': isMobile }">
+  <div class="ms-panel" :class="{ 'ms-has-mbar': isMobile && selectedItems.length }">
     <div class="ms-panel-title">
       <span>
         我的收藏
         <span class="ms-sub">· 共 {{ total }} 部</span>
       </span>
+      <el-button v-if="isMobile" size="small" text :disabled="!items.length" @click="toggleSelectAll">{{ allSelected ? '取消全选' : '全选本页' }}</el-button>
       <div v-if="!isMobile" class="view-switch">
         <el-radio-group v-model="viewMode" size="small">
           <el-radio-button value="card">卡片</el-radio-button>
@@ -204,7 +205,7 @@ watch(
       </div>
     </div>
 
-    <div class="ms-toolbar">
+    <div class="ms-toolbar favorites-toolbar">
       <el-select
         v-model="accountId"
         placeholder="选择账号"
@@ -408,7 +409,7 @@ watch(
     </div>
 
     <!-- 手机端底部固定操作栏：选择与批量下载 -->
-    <div v-if="isMobile" class="ms-mbar">
+    <div v-if="isMobile && selectedItems.length" class="ms-mbar">
       <span class="grow">
         已选 <b>{{ selectedItems.length }}</b> / {{ items.length }} 部
       </span>
@@ -508,5 +509,12 @@ watch(
 
 .fav-table-actions :deep(.el-button) {
   margin-left: 0 !important;
+}
+
+@media(max-width:768px) {
+ .favorites-toolbar { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+ .favorites-toolbar > .el-button { margin-left: 0; }
+ .favorites-toolbar > .acct-select, .favorites-toolbar > .grow { grid-column: 1 / 3; }
+ .ms-panel-title { flex-direction: row; align-items: center; }
 }
 </style>

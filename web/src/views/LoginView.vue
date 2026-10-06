@@ -141,7 +141,7 @@ async function submit() {
 <style scoped>
 /* 登录 / 首改密码页：整屏柔和的浅色渐变底 */
 .auth-page {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -151,10 +151,10 @@ async function submit() {
 
 .auth-card {
   width: 100%;
-  max-width: 380px;
+  max-width: 420px;
   background: var(--ms-panel);
   border: 1px solid var(--ms-border);
-  border-radius: 14px;
+  border-radius: 18px;
   box-shadow: 0 8px 30px rgba(16, 24, 40, 0.08);
 }
 
@@ -170,7 +170,7 @@ async function submit() {
 }
 
 .auth-title {
-  font-size: 18px;
+  font-size: 22px;
   font-weight: 700;
   letter-spacing: 0.4px;
 }

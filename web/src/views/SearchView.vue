@@ -151,12 +151,12 @@ const quickKeywords = ['同人', '短篇', '中文', '单行本']
     <div class="ms-panel-title">
       <span>
         搜索
-        <span class="ms-sub">· 走各源官方接口（/api/search）</span>
+        <span class="ms-sub">· 按标题或关键词查找</span>
       </span>
       <span v-if="total" class="ms-dim">共 {{ total }} 条结果</span>
     </div>
 
-    <div class="ms-toolbar">
+    <div class="ms-toolbar search-toolbar">
       <el-radio-group v-model="kind" size="default">
         <el-radio-button v-for="k in KIND_OPTIONS" :key="k.value" :value="k.value">
           {{ k.label }}
@@ -301,5 +301,20 @@ const quickKeywords = ['同人', '短篇', '中文', '单行本']
   .sort-select {
     width: 100%;
   }
+}
+
+.search-toolbar { display: grid; grid-template-columns: minmax(160px,1fr) 200px 160px 88px; }
+.search-toolbar > .grow { grid-column: 1 / 4; grid-row: 1; }
+.search-toolbar > .el-button { grid-column: 4; grid-row: 1; margin: 0; }
+.search-toolbar > .el-radio-group { grid-column: 1; grid-row: 2; }
+.search-toolbar > .acct-select { grid-column: 2; grid-row: 2; width: 100%; }
+.search-toolbar > .sort-select { grid-column: 3 / 5; grid-row: 2; width: 100%; }
+@media(max-width:1100px) {
+ .search-toolbar { grid-template-columns: 1fr 1fr; }
+ .search-toolbar > .grow { grid-column: 1 / 3; }
+ .search-toolbar > .el-button { grid-column: 1 / 3; grid-row: 2; }
+ .search-toolbar > .el-radio-group { grid-column: 1 / 3; grid-row: 3; }
+ .search-toolbar > .acct-select { grid-column: 1; grid-row: 4; min-width: 0; }
+ .search-toolbar > .sort-select { grid-column: 2; grid-row: 4; min-width: 0; }
 }
 </style>

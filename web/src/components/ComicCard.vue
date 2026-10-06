@@ -47,13 +47,14 @@ function handleCmd(cmd) {
   <div class="ms-comic" :class="{ 'is-selected': selected }">
     <div class="ms-comic-check" v-if="selectable">
       <el-checkbox
+        :aria-label="'选择 ' + (item.title || '漫画')"
         :model-value="selected"
         @change="emit('toggle', item)"
         @click.stop
       />
     </div>
 
-    <div class="ms-comic-cover" @click="emit('open', item)">
+    <div class="ms-comic-cover" role="button" tabindex="0" :aria-label="'查看 ' + (item.title || '漫画')" @keydown.enter="emit('open', item)" @keydown.space.prevent="emit('open', item)" @click="emit('open', item)">
       <CoverImage :kind="item.kind" :comic-id="item.comicId" :src="item.cover" :title="item.title" />
       <div class="ms-comic-tags">
         <slot name="badge" />
@@ -61,7 +62,7 @@ function handleCmd(cmd) {
       </div>
       <div v-if="readable" class="cover-quick-read" @click.stop="emit('read', item)">
         <el-icon :size="15"><Reading /></el-icon>
-        <span>立即阅读</span>
+        <span>查看详情</span>
       </div>
     </div>
 
@@ -168,7 +169,7 @@ function handleCmd(cmd) {
           trigger="click"
           @command="handleCmd"
         >
-          <el-button size="small" class="more-icon-btn">
+          <el-button size="small" class="more-icon-btn" :aria-label="(item.title || '漫画') + '的更多操作'">
             <el-icon :size="13"><MoreFilled /></el-icon>
           </el-button>
           <template #dropdown>

@@ -29,15 +29,17 @@ const AUTH_PAGES = ['/login', '/change-password']
 const isAuthPage = computed(() => route.meta?.bare === true || AUTH_PAGES.includes(route.path))
 const username = computed(() => auth.user?.username || '未登录')
 
-const NAV_PATHS = [
-  '/dashboard',
-  '/accounts',
-  '/favorites',
-  '/search',
-  '/downloads',
-  '/library',
-  '/settings'
-]
+const NAV_PATHS = ['/dashboard', '/library', '/favorites', '/search', '/downloads', '/accounts', '/settings']
+const PAGE_DESCRIPTIONS = {
+ '/dashboard': '从上次停下的地方继续，或发现下一本想读的漫画。',
+ '/library': '整理本地作品，随时开始阅读。',
+ '/favorites': '把喜欢的作品留在这里，同步与下载随你安排。',
+ '/search': '在不同漫画源中，找到你想读的作品。',
+ '/downloads': '查看同步与下载进度，处理需要重试的任务。',
+ '/accounts': '管理漫画源账号与收藏同步。',
+ '/settings': '按你的设备和阅读习惯调整应用。'
+}
+const mobilePaths = ['/library', '/favorites', '/search', '/downloads']
 const MENU = NAV_PATHS.map((path) => {
   const { meta } = router.resolve(path)
   return { path, title: meta.title || path, icon: meta.icon }
@@ -100,14 +102,14 @@ onMounted(async () => {
 
   <el-container v-else class="app-shell">
     <!-- 桌面端侧边导航 -->
-    <el-aside v-if="!isMobile" width="206px" class="app-aside">
+    <el-aside v-if="!isMobile" width="224px" class="app-aside">
       <div class="brand">
         <div class="brand-logo-badge">
           <el-icon :size="18"><Files /></el-icon>
         </div>
         <div class="brand-text">
           <span class="brand-name">mangaSync</span>
-          <span class="brand-tag">PRO</span>
+          <span class="brand-tag">个人书房</span>
         </div>
       </div>
       <el-menu :default-active="activePath" class="app-menu" @select="go">
@@ -156,7 +158,7 @@ onMounted(async () => {
         </div>
         <div class="brand-text">
           <span class="brand-name">mangaSync</span>
-          <span class="brand-tag">PRO</span>
+          <span class="brand-tag">个人书房</span>
         </div>
       </div>
       <el-menu :default-active="activePath" class="app-menu" @select="go">
@@ -201,7 +203,7 @@ onMounted(async () => {
             @click="drawerOpen = true"
             aria-label="打开导航"
           />
-          <span class="header-title">{{ pageTitle }}</span>
+          <span class="header-context">mangaSync</span><span class="header-slash">/</span><span class="header-title">{{ pageTitle }}</span>
         </div>
         <div class="header-right">
 
@@ -213,26 +215,37 @@ onMounted(async () => {
               <span class="hide-xs">{{ runningCount }} 进行中</span>
             </el-button>
           </el-tooltip>
-          <el-button text :icon="'Refresh'" @click="store.triggerRefresh()">
+          <el-button text aria-label="刷新当前页面" :icon="'Refresh'" @click="store.triggerRefresh()">
             <span class="hide-xs">刷新</span>
           </el-button>
         </div>
       </el-header>
 
       <el-main class="app-main">
+        <div class="page-content">
+        <header class="page-intro">
+          <div><h1>{{ route.path === '/dashboard' ? '你的漫画书房' : pageTitle }}</h1><p>{{ PAGE_DESCRIPTIONS[route.path] }}</p></div>
+        </header>
         <router-view v-slot="{ Component }">
           <keep-alive :max="3">
             <component :is="Component" />
           </keep-alive>
         </router-view>
+        </div>
       </el-main>
     </el-container>
+    <nav v-if="isMobile" class="mobile-nav" aria-label="常用页面">
+      <button v-for="m in MENU.filter(m => mobilePaths.includes(m.path))" :key="m.path" :class="{ active: activePath === m.path }" :aria-current="activePath === m.path ? 'page' : undefined" :aria-label="'前往' + m.title" @click="go(m.path)">
+        <el-icon :size="21"><component :is="m.icon" /></el-icon><span>{{ m.title }}</span>
+        <span v-if="m.path === '/downloads' && runningCount" class="nav-dot" aria-label="有进行中的任务"></span>
+      </button>
+    </nav>
   </el-container>
 </template>
 
 <style scoped>
 .app-shell {
-  height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -249,26 +262,27 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 18px 18px 14px;
+  padding: 28px 22px 26px;
 }
 
 .brand-logo-badge {
   width: 32px;
   height: 32px;
   border-radius: 9px;
-  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  background: #426a99;
   color: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
+  box-shadow: none;
   flex-shrink: 0;
 }
 
 .brand-text {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 3px;
 }
 
 .brand-name {
@@ -281,11 +295,11 @@ onMounted(async () => {
 .brand-tag {
   font-size: 10px;
   font-weight: 700;
-  padding: 1px 5px;
+  padding: 0;
   border-radius: 4px;
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
-  letter-spacing: 0.5px;
+  color: var(--ms-text-dim);
+  letter-spacing: 1px;
+  font-weight: 400;
 }
 
 .app-menu {
@@ -297,7 +311,7 @@ onMounted(async () => {
 
 .app-menu :deep(.el-menu-item) {
   height: 44px;
-  margin: 3px 10px;
+  margin: 5px 14px;
   border-radius: 9px;
   font-weight: 500;
   transition: all 0.18s ease;
@@ -315,15 +329,14 @@ onMounted(async () => {
   box-shadow: 0 1px 2px rgba(37, 99, 235, 0.06);
 }
 
-.menu-badge {
-  margin-left: auto;
-}
+.menu-badge { margin-left: auto; display: inline-flex; align-items: center; }
+.menu-badge :deep(.el-badge__content) { position: static; transform: none; }
 
 .aside-foot {
   padding: 12px 16px 14px;
   font-size: 12px;
   border-top: 1px solid var(--ms-border);
-  background: #fafbfc;
+  background: transparent;
 }
 
 .foot-row {
@@ -364,8 +377,8 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  height: 56px;
-  padding: 0 20px;
+  height: 64px;
+  padding: 0 32px;
   background: rgba(255, 255, 255, 0.88);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
@@ -403,14 +416,15 @@ onMounted(async () => {
 }
 
 .app-main {
-  padding: 16px 20px 24px;
+  padding: 28px 32px 40px;
   overflow-y: auto;
   background: var(--ms-bg);
 }
 
 @media (max-width: 768px) {
   .app-header {
-    height: 52px;
+    height: calc(56px + env(safe-area-inset-top));
+    padding-top: env(safe-area-inset-top);
     padding: 0 10px;
     gap: 6px;
   }
@@ -420,13 +434,26 @@ onMounted(async () => {
   }
 
   .app-main {
-    padding: 10px;
+    padding: 20px 14px calc(88px + env(safe-area-inset-bottom));
   }
 
   .hide-xs {
     display: none;
   }
 }
+
+.page-content { width: 100%; max-width: 1480px; margin: 0 auto; }
+.page-intro { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
+.page-intro h1 { margin: 0 0 8px; font-size: 28px; font-weight: 650; letter-spacing: -.8px; line-height: 1.3; }
+.page-intro p { margin: 0; color: var(--ms-text-dim); font-size: 13px; line-height: 1.7; }
+.page-intro-mark { font-size: 10px; letter-spacing: 2px; color: #8794a1; white-space: nowrap; }
+.header-context { font-size: 12px; color: var(--ms-text-dim); }
+.header-slash { color: var(--ms-border-strong); padding: 0 6px; }
+.mobile-nav { position: fixed; bottom: 0; left: 0; right: 0; height: calc(66px + env(safe-area-inset-bottom)); padding: 4px 12px calc(4px + env(safe-area-inset-bottom)); display: grid; grid-template-columns: repeat(4,1fr); background: var(--ms-overlay); border-top: 1px solid var(--ms-border); backdrop-filter: blur(16px); z-index: 1600; }
+.mobile-nav button { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border: 0; border-radius: 12px; background: transparent; color: var(--ms-text-dim); font: inherit; font-size: 11px; cursor: pointer; }
+.mobile-nav button.active { color: var(--el-color-primary); background: var(--el-color-primary-light-9); font-weight: 600; }
+.nav-dot { position: absolute; width: 5px; height: 5px; background: var(--el-color-primary); top: 5px; right: calc(50% - 16px); border-radius: 50%; }
+@media (max-width: 768px) { .page-intro { margin-bottom: 20px; } .page-intro h1 { font-size: 24px; } .page-intro-mark, .header-context, .header-slash { display: none; } }
 </style>
 
 <style>

@@ -178,11 +178,13 @@ const shortcuts = [
     <div class="ms-panel">
       <div class="ms-panel-title">继续阅读</div>
       <div v-if="!reading.length" class="ms-empty">开始阅读后，这里会保存你的阅读位置。</div>
+      <div class="reading-grid">
       <div v-for="book in reading" :key="book.kind + book.comicId" class="reading-row">
         <img :src="api.coverUrl(book.kind, book.comicId)" alt="" loading="lazy" />
         <div class="reading-info"><strong>{{ book.title || book.comicId }}</strong><div class="ms-dim">第 {{ book.order }} 章 · 第 {{ book.page }} 页</div></div>
         <el-button type="primary" @click="openReaderWindow(book)">继续阅读</el-button>
         <el-button text @click="openReaderWindow(book, 1, '', false)">从头阅读</el-button>
+      </div>
       </div>
     </div>
     <div class="ms-panel">
@@ -338,7 +340,7 @@ const shortcuts = [
         <div
           v-for="s in shortcuts"
           :key="s.path"
-          class="shortcut-card"
+          class="shortcut-card" role="button" tabindex="0" @keydown.enter="router.push(s.path)" @keydown.space.prevent="router.push(s.path)"
           @click="router.push(s.path)"
         >
           <div class="shortcut-icon-wrap" :style="{ backgroundColor: `${s.color}14`, color: s.color }">
@@ -474,4 +476,14 @@ const shortcuts = [
   transform: translateX(2px);
 }
 
+
+.reading-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+.reading-row { border: 1px solid var(--ms-border); border-radius: 12px; padding: 16px; background: var(--ms-bg-soft); }
+.reading-row img { width: 54px; height: 72px; border-radius: 6px; }
+.reading-info { min-width: 0; flex-basis: calc(100% - 80px); line-height: 1.8; }
+.reading-info strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.reading-row :deep(.el-button) { margin-left: 0; }
+.shortcut-card { box-shadow: none; transition: border-color .15s; }
+.shortcut-card:hover { transform: none; box-shadow: none; }
+@media(max-width:768px) { .reading-grid { grid-template-columns: 1fr; } .reading-row { padding: 14px; } }
 </style>

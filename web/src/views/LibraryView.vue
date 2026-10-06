@@ -206,7 +206,6 @@ watch(
       <el-button text type="primary" @click="restoreItem(item)">恢复</el-button>
     </div>
   </el-dialog>
-  <el-button style="margin-bottom: 12px" @click="showTrash">回收站</el-button>
   <div class="ms-panel">
     <div class="ms-panel-title">
       <div class="title-left">
@@ -214,6 +213,7 @@ watch(
         <span class="ms-sub">· 共 {{ total }} 部</span>
       </div>
       <div class="head-actions">
+        <el-button size="small" @click="showTrash">回收站</el-button>
         <div v-if="!isMobile" class="view-switch">
           <el-radio-group v-model="viewMode" size="small">
             <el-radio-button value="card">卡片</el-radio-button>
@@ -226,6 +226,8 @@ watch(
     </div>
 
     <!-- 顶部数据概览 -->
+    <details class="library-summary" :open="!isMobile">
+      <summary>书库概览 <span>{{ stats?.comics ?? total }} 部 · {{ sizeText }}</span></summary>
     <div class="ms-stat-grid mb14">
       <StatCard label="作品数" :value="stats?.comics ?? '—'" icon="Collection" color="#3b82f6" sub="库内漫画总数" />
       <StatCard label="章节数" :value="stats?.chapters ?? '—'" icon="Tickets" color="#10b981" sub="全部章节合计" />
@@ -233,8 +235,10 @@ watch(
       <StatCard label="占用空间" :value="sizeText" icon="FolderOpened" color="#f59e0b" sub="本地存储空间" />
     </div>
 
+    </details>
+
     <!-- 过滤搜索栏 -->
-    <div class="ms-toolbar">
+    <div class="ms-toolbar library-toolbar">
       <el-select v-model="kind" class="kind-select" placeholder="全部源" clearable @change="search">
         <el-option label="全部源" value="" />
         <el-option v-for="k in KIND_OPTIONS" :key="k.value" :label="k.label" :value="k.value" />
@@ -259,7 +263,7 @@ watch(
     <div v-if="viewMode === 'card' || isMobile" v-loading="loading" class="ms-comic-grid">
       <div v-for="row in items" :key="row.id" class="ms-comic lib-card">
         <!-- 封面区 -->
-        <div class="ms-comic-cover" @click="openReader(row)">
+        <div class="ms-comic-cover" role="button" tabindex="0" :aria-label="'阅读 ' + row.title" @keydown.enter="openReader(row)" @keydown.space.prevent="openReader(row)" @click="openReader(row)">
           <CoverImage :kind="row.kind" :comic-id="row.comicId" :src="row.cover" :title="row.title" />
           <div class="ms-comic-tags">
             <KindTag :kind="row.kind" />
@@ -605,5 +609,16 @@ watch(
   .sort-select {
     width: 100%;
   }
+}
+
+.library-summary > summary { display: none; }
+@media(max-width:768px) {
+ .library-summary { margin-bottom: 16px; background: var(--ms-bg-soft); border-radius: 8px; }
+ .library-summary > summary { display: list-item; cursor: pointer; padding: 14px; font-size: 12px; }
+ .library-summary > summary span { color: var(--ms-text-dim); margin-left: 10px; }
+ .library-summary .ms-stat-grid { padding: 0 10px 10px; }
+ .library-toolbar { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+ .library-toolbar > .grow, .library-toolbar > .el-button { grid-column: 1 / 3; }
+ .library-toolbar > * { min-width: 0; }
 }
 </style>

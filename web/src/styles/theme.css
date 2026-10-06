@@ -714,58 +714,68 @@ a {
   opacity: 0.85;
 }
 
-/* ---------------- 卡片与面板质感升级 ---------------- */
+/* Shared visual system: quiet surfaces, blue accents, readable content density. */
 :root {
-  --ms-bg: #f8fafc;
-  --ms-bg-soft: #f1f5f9;
-  --ms-panel: #ffffff;
-  --ms-border: #e2e8f0;
-  --ms-border-strong: #cbd5e1;
-  --ms-text: #0f172a;
-  --ms-text-dim: #64748b;
-  --ms-accent: #2563eb;
-  --ms-radius: 12px;
-  --ms-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), 0 4px 12px rgba(15, 23, 42, 0.03);
-  --ms-shadow-hover: 0 12px 28px -4px rgba(15, 23, 42, 0.08), 0 4px 8px -2px rgba(15, 23, 42, 0.03);
+  --ms-bg: #f5f7fa;
+  --ms-bg-soft: #f7f9fb;
+  --ms-panel: #fff;
+  --ms-border: #e5eaf0;
+  --ms-border-strong: #cad3df;
+  --ms-text: #243247;
+  --ms-text-dim: #68778a;
+  --ms-accent: var(--el-color-primary);
+  --ms-radius: 14px;
+  --ms-shadow: 0 2px 6px #25344a03;
+  --ms-shadow-hover: 0 8px 24px #25344a0d;
 }
+.ms-panel { padding: 22px; }
+.ms-panel + .ms-panel { margin-top: 20px; }
+.ms-panel-title { margin-bottom: 20px; font-size: 15px; line-height: 1.6; }
+.ms-toolbar { padding: 14px; background: var(--ms-bg-soft); border-radius: 10px; margin-bottom: 20px; gap: 10px; }
+.ms-comic-grid { grid-template-columns: repeat(auto-fill,minmax(172px,1fr)); gap: 20px; }
+.ms-comic { box-shadow: none; border-color: transparent; background: transparent; border-radius: 10px; }
+.ms-comic-body { padding: 12px 2px 4px; gap: 6px; }
+.ms-comic-cover { border-radius: 10px; }
+.ms-comic-title { font-size: 14px; line-height: 1.5; min-height: 1.5em; max-height: 3em; }
+.ms-comic-meta { font-size: 12px; }
+.ms-comic.is-selected { background: var(--el-color-primary-light-9); }
+.ms-comic:hover { transform: none; box-shadow: none; border-color: transparent; }
+.ms-comic.is-selected:hover { border-color: var(--el-color-primary); }
+.ms-comic-cover::after { display: none; }
+.ms-comic:hover .ms-comic-cover img { transform: none; }
+.ms-stat-grid { grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; }
+.ms-stat { background: var(--ms-panel); padding: 16px; min-width: 0; box-shadow: none; }
+.ms-stat .value { font-variant-numeric: tabular-nums; }
+.ms-empty { padding: 40px 16px; line-height: 1.8; }
+.ms-mcard { background: var(--ms-panel); padding: 16px; border-radius: 12px; }
+.el-button { border-radius: 8px; font-weight: 500; transition: background .15s, border-color .15s; }
+.el-button--primary { box-shadow: none; }
+.el-button--small { border-radius: 6px; }
+.el-tag { border-radius: 5px; }
+.app-main .el-table { --el-table-header-bg-color: var(--ms-bg-soft); --el-table-row-hover-bg-color: #f7f9fc; font-size: 13px; }
+.app-main .el-table th.el-table__cell { font-size: 12px; font-weight: 500; color: var(--ms-text-dim); padding: 12px 0; }
+.app-main .el-table td.el-table__cell { padding: 14px 0; }
+.el-dialog { border-radius: 16px; }
+:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 3px; }
+@media (max-width: 1100px) { .ms-stat-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 768px) {
+ .ms-panel { padding: 16px; border-radius: 12px; }
+ .ms-panel + .ms-panel { margin-top: 16px; }
+ .ms-panel-title { margin-bottom: 16px; }
+ .ms-toolbar { padding: 12px; margin-bottom: 16px; }
+ .ms-comic-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px 12px; }
+ .ms-comic-body { padding: 10px 1px 2px; }
+ .ms-comic-title { font-size: 13px; }
+ .ms-comic-meta { font-size: 11px; }
+ .ms-stat { padding: 12px; }
+ .ms-mbar { bottom: calc(66px + env(safe-area-inset-bottom)); padding: 10px 12px; }
+ .ms-has-mbar { padding-bottom: 80px; }
+ .app-main .el-table { max-width: 100%; }
+}
+@media (hover: hover) {
+ .ms-comic-cover:hover { box-shadow: var(--ms-shadow-hover); }
+ .ms-comic-cover:hover img { transform: scale(1.015); }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
 
-.ms-panel {
-  border-radius: var(--ms-radius);
-  box-shadow: var(--ms-shadow);
-  border: 1px solid var(--ms-border);
-}
-
-.ms-stat {
-  border-radius: var(--ms-radius);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-}
-
-.ms-stat:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--ms-shadow);
-  border-color: var(--el-color-primary-light-7);
-}
-
-.el-button {
-  border-radius: 8px;
-  font-weight: 500;
-  transition: all 0.18s ease;
-}
-
-.el-button--primary {
-  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.15);
-}
-
-.el-button--primary:hover {
-  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.25);
-  transform: translateY(-1px);
-}
-
-.el-button--small {
-  border-radius: 6px;
-}
-
-.el-tag {
-  border-radius: 6px;
-}
+@media (hover: none) { .app-main .ms-comic .cover-quick-read { display: none; } }
