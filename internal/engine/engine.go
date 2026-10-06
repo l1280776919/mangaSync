@@ -33,16 +33,18 @@ type Engine struct {
 	srcs    map[string]source.Source
 	srcKeys map[string]string
 
-	scanMu    sync.Mutex
-	opMu      sync.Mutex
-	syncMu    sync.Mutex
-	syncJobs  map[int64]*syncJob
-	syncSlots chan struct{}
-	lifeCtx   context.Context
+	scanMu        sync.Mutex
+	opMu          sync.Mutex
+	syncMu        sync.Mutex
+	syncJobs      map[int64]*syncJob
+	syncSlots     chan struct{}
+	lifeCtx       context.Context
+	favMu         sync.Mutex
+	favoriteLoads map[int64]*favoriteLoad
 }
 
 func New(st *store.Store, cfg *config.Manager) *Engine {
-	return &Engine{st: st, cfg: cfg, syncJobs: map[int64]*syncJob{}, syncSlots: make(chan struct{}, 2), lifeCtx: context.Background(),
+	return &Engine{st: st, cfg: cfg, syncJobs: map[int64]*syncJob{}, favoriteLoads: map[int64]*favoriteLoad{}, syncSlots: make(chan struct{}, 2), lifeCtx: context.Background(),
 		running: map[int64]context.CancelFunc{}, subs: map[chan []byte]struct{}{},
 		srcs: map[string]source.Source{}, srcKeys: map[string]string{}}
 }
@@ -207,6 +209,18 @@ func (e *Engine) Start(ctx context.Context) {
 	e.syncMu.Lock()
 	e.lifeCtx = ctx
 	e.syncMu.Unlock()
+	go func() {
+		ids, err := e.st.InterruptedSyncAccounts()
+		if err != nil {
+			return
+		}
+		for _, id := range ids {
+			if ctx.Err() != nil {
+				return
+			}
+			e.StartAccountSyncMode(id, "resume")
+		}
+	}()
 	go func() {
 		t := time.NewTicker(800 * time.Millisecond)
 		defer t.Stop()
@@ -454,11 +468,10 @@ func (e *Engine) Broadcast(name string, payload any) { e.broadcastEvent(name, pa
 // ---------------- 收藏同步入队 ----------------
 
 // SyncAccount 把某账号的收藏里「没下完/有更新」的入队，返回 (入队数, 跳过数)
-func (e *Engine) syncAccount(ctx context.Context, accID int64) (enq, skip int, resultErr error) {
+func (e *Engine) syncAccount(ctx context.Context, accID int64, mode string) (enq, skip int, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return 0, 0, err
 	}
-
 	acc, err := e.st.GetAccount(accID)
 	if err != nil {
 		return 0, 0, err
@@ -467,92 +480,101 @@ func (e *Engine) syncAccount(ctx context.Context, accID int64) (enq, skip int, r
 	if err != nil {
 		return 0, 0, err
 	}
+	var favs []*source.Comic
+	var partialErr error
+	if mode == "resume" || mode == "retry" {
+		favs, err = e.st.PendingSyncItems(accID, mode == "retry")
+		if err == nil && len(favs) == 0 {
+			return 0, 0, fmt.Errorf("没有可续跑的逐本项目，请使用立即同步刷新收藏")
+		}
+		if err != nil {
+			return 0, 0, err
+		}
+	} else {
+		favs, partialErr = e.RefreshFavorites(ctx, accID)
+		if len(favs) == 0 && partialErr != nil {
+			return 0, 0, partialErr
+		}
+		if err = e.st.PrepareSyncItems(accID, favs); err != nil {
+			return 0, 0, err
+		}
+	}
+	// Load refreshed credentials after the shared favorites fetch may have reauthenticated.
+	acc, err = e.st.GetAccount(accID)
+	if err != nil {
+		return 0, 0, err
+	}
 	cred, err := e.EnsureCred(ctx, acc)
 	if err != nil {
 		return 0, 0, err
 	}
-	favs, err := src.Favorites(ctx, cred)
-	var partialErr error
-	if err != nil {
-		if errors.Is(err, source.ErrAuth) && acc.Username != "" && acc.Password != "" {
-			if cred2, e2 := e.Relogin(ctx, acc); e2 == nil {
-				if f2, e3 := src.Favorites(ctx, cred2); len(f2) > 0 || e3 == nil {
-					favs, err = f2, e3
-					cred = cred2
-				}
-			}
-		}
-		if len(favs) == 0 {
-			return 0, 0, err
-		}
-		// 中途翻页失败（源返回了已取到的部分）：先把这部分入队，最后连同错误一起返回，
-		// 让调用方提示「部分同步」，而不是像以前那样要么整单失败、要么静默当成功
-		partialErr = err
-	}
-	e.updateSync(accID, "checking", 0, len(favs), enq, skip)
 	processed := 0
-	for i, c := range favs {
-		e.updateSync(accID, "checking", i, len(favs), enq, skip)
+	for _, c := range favs {
 		if err := ctx.Err(); err != nil {
-			partialErr = errors.Join(partialErr, err)
-			break
+			return enq, skip, errors.Join(partialErr, err)
 		}
-		processed = i + 1
-		if blocked, err := e.st.InTrash(acc.Kind, c.ComicID); err != nil {
-			partialErr = errors.Join(partialErr, err)
-			continue
-		} else if blocked {
-			skip++
-			continue
-		}
-		active, err := e.st.ActiveJobID(acc.Kind, c.ComicID)
-		if err != nil {
-			partialErr = errors.Join(partialErr, err)
-			continue
-		}
-		if active > 0 {
-			skip++
-			continue
-		}
-		rec, err := e.st.GetComic(acc.Kind, c.ComicID)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			partialErr = errors.Join(partialErr, err)
-			continue
-		}
-		// A wholly missing book needs no remote chapter/image inventory before download.
-		var missing []int
-		if rec != nil && rec.Images > 0 {
-			missing, err = e.verifyComic(ctx, src, cred, c.ComicID)
-			if errors.Is(err, source.ErrAuth) {
-				if cred, err = e.Relogin(ctx, acc); err == nil {
-					missing, err = e.verifyComic(ctx, src, cred, c.ComicID)
-				}
+		e.updateSync(accID, "checking", processed, len(favs), enq, skip)
+		added, err := e.syncComic(ctx, acc, src, cred, c, mode)
+		if errors.Is(err, source.ErrAuth) {
+			cred, err = e.Relogin(ctx, acc)
+			if err == nil {
+				added, err = e.syncComic(ctx, acc, src, cred, c, mode)
 			}
-			if err != nil {
-				partialErr = errors.Join(partialErr, fmt.Errorf("%s: %w", c.Title, err))
-				continue
-			}
-			if len(missing) == 0 {
+		}
+		if ctx.Err() != nil {
+			return enq, skip, errors.Join(partialErr, ctx.Err())
+		} // leave current item pending for restart
+		if err == nil {
+			if added {
+				enq++
+			} else {
 				skip++
-				continue
 			}
+		} else {
+			partialErr = errors.Join(partialErr, fmt.Errorf("%s: %w", c.Title, err))
 		}
-
-		if _, err = e.Enqueue(&store.Job{Kind: acc.Kind, AccountID: acc.ID, ComicID: c.ComicID, Title: c.Title, Chapters: missing}); err != nil {
-			partialErr = errors.Join(partialErr, err)
-			continue
+		if saveErr := e.st.FinishSyncItem(accID, c.ComicID, err); saveErr != nil {
+			return enq, skip, errors.Join(partialErr, saveErr)
 		}
-		enq++
+		processed++
 	}
-
 	e.updateSync(accID, "checking", processed, len(favs), enq, skip)
-	if ctx.Err() != nil {
-		partialErr = errors.Join(partialErr, ctx.Err())
-	}
 	if partialErr == nil {
-		partialErr = e.st.TouchSync(acc.ID)
+		partialErr = e.st.TouchSync(accID)
 	}
 	return enq, skip, partialErr
+}
+
+func (e *Engine) syncComic(ctx context.Context, acc *store.Account, src source.Source, cred *source.Cred, c *source.Comic, mode string) (bool, error) {
+	if blocked, err := e.st.InTrash(acc.Kind, c.ComicID); err != nil || blocked {
+		return false, err
+	}
+	if active, err := e.st.ActiveJobID(acc.Kind, c.ComicID); err != nil || active > 0 {
+		return false, err
+	}
+	rec, err := e.st.GetComic(acc.Kind, c.ComicID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	var missing []int
+	if rec != nil && rec.Images > 0 {
+		fingerprint, fpErr := localFingerprint(rec.Path)
+		if mode != "full" && rec.Complete && fpErr == nil && e.st.ComicCheckFresh(acc.Kind, c.ComicID, c.ChaptersCount, fingerprint) {
+			return false, nil
+		}
+		missing, err = e.verifyComic(ctx, src, cred, c.ComicID)
+		if err != nil {
+			return false, err
+		}
+		if len(missing) == 0 {
+			if fpErr == nil {
+				err = e.st.SaveComicCheck(acc.Kind, c.ComicID, c.ChaptersCount, fingerprint)
+			}
+			return false, err
+		}
+	}
+	_, err = e.Enqueue(&store.Job{Kind: acc.Kind, AccountID: acc.ID, ComicID: c.ComicID, Title: c.Title, Chapters: missing})
+	return err == nil, err
 }
 
 // SyncAll 供定时任务调用

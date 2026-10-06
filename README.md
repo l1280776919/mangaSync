@@ -66,7 +66,7 @@ go build -o mangasync .
 
 一键：`scripts/build.sh`（测试、构建前后端，输出 `dist/mangasync`，不会重启服务）。
 
-部署：`sudo scripts/deploy.sh dist/mangasync /实际安装路径/mangasync`。可追加服务名和健康检查 URL；健康检查失败会恢复旧二进制并重启。升级前请对运行数据库做 SQLite 在线备份。具体行为和验证范围见 [可靠性与阅读优化](docs/RELIABILITY.md)。
+部署：`sudo scripts/deploy.sh dist/mangasync /实际安装路径/mangasync mangasync http://127.0.0.1:8787/api/health /实际数据目录`。升级前生成数据快照；健康检查失败时恢复数据与旧二进制。升级前请对运行数据库做 SQLite 在线备份。具体行为和验证范围见 [可靠性与阅读优化](docs/RELIABILITY.md)。
 
 systemd（可选）：
 
@@ -131,3 +131,5 @@ curl -b ck.txt http://<地址>/api/stats
 - **图片画质**：站点下发的原图若带乱序（scramble），会先解码→按行带还原→**无损 WebP 编码**落盘
   （不引入二次压缩损失；不做乱序的图直接原字节保存）。代价是体积约为站点有损版的 2~3 倍。
 - 图片来源与账号凭据仅保存在本机（config.json 权限 600、SQLite 本地文件）。
+
+运行、增量同步、续传、凭据加密、备份恢复与浏览器测试见 [运行维护说明](docs/OPERATIONS.md)。

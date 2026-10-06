@@ -40,7 +40,7 @@ func (s *Server) readerMeta(w http.ResponseWriter, r *http.Request) {
 
 	// 本地优先：已下载的章节直接数文件，不走网络
 	if dir, ok := s.localChapterDir(kind, comicID, order); ok {
-		if files := imageFilesIn(dir); len(files) > 0 {
+		if files := cachedImageFiles(dir); len(files) > 0 {
 			resp["pages"] = len(files)
 			resp["local"] = true
 			resp["dir"] = dir
@@ -86,7 +86,7 @@ func (s *Server) readerPage(w http.ResponseWriter, r *http.Request) {
 
 	// 1) 本地已下载的图（零网络、秒开、支持条件请求 304 与内核零拷贝 sendfile）
 	if dir, ok := s.localChapterDir(kind, comicID, order); ok {
-		if files := imageFilesIn(dir); page <= len(files) {
+		if files := cachedImageFiles(dir); page <= len(files) {
 			target := files[page-1]
 			if fi, err := os.Stat(target); err == nil && !fi.IsDir() && fi.Size() > 0 {
 				serveCachedFile(w, r, target, fi)
@@ -281,14 +281,27 @@ func imageFilesIn(dir string) []string {
 	if err != nil {
 		return nil
 	}
-	var out []string
-	for _, e := range entries {
-		if e.IsDir() || !readerImgExts[strings.ToLower(filepath.Ext(e.Name()))] {
+	pages := map[int]string{}
+	for _, entry := range entries {
+		if entry.IsDir() {
 			continue
 		}
-		out = append(out, filepath.Join(dir, e.Name()))
+		ext := filepath.Ext(entry.Name())
+		if !readerImgExts[strings.ToLower(ext)] {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimSuffix(entry.Name(), ext))
+		if err != nil || n < 1 {
+			continue
+		}
+		if fi, err := entry.Info(); err == nil && fi.Size() > 0 {
+			pages[n] = filepath.Join(dir, entry.Name())
+		}
 	}
-	sort.Strings(out)
+	out := []string{}
+	for n := 1; pages[n] != ""; n++ {
+		out = append(out, pages[n])
+	}
 	return out
 }
 

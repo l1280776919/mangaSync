@@ -152,3 +152,30 @@ type Source interface {
 	Cover(ctx context.Context, cred *Cred, comicID string) ([]byte, string, error)
 	Download(ctx context.Context, cred *Cred, comicID string, orders []int, dstRoot string, h Hooks) (*Result, error)
 }
+
+// Lists encode chapters as a count; details encode an array. Support both when restoring snapshots.
+func (c *Comic) UnmarshalJSON(raw []byte) error {
+	type plain Comic
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	ch := fields["chapters"]
+	delete(fields, "chapters")
+	data, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	var p plain
+	if err = json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*c = Comic(p)
+	if len(ch) > 0 && string(ch) != "null" {
+		if ch[0] == '[' {
+			return json.Unmarshal(ch, &c.Chapters)
+		}
+		return json.Unmarshal(ch, &c.ChaptersCount)
+	}
+	return nil
+}

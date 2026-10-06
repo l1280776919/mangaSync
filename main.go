@@ -154,7 +154,45 @@ func main() {
 	frontendFor := flag.String("frontend-for", "",
 		"前端节点模式：本机只发前端静态资源，并把 /api/* 反代到该地址（例如 http://127.0.0.1:18888）。"+
 			"用于 NAS 上行很弱时把静态资源放到 VPS 就近直发，只让 API 走隧道")
+	backupTo := flag.String("backup-to", "", "在线备份到新目录（密钥单独保管）")
+	verifyBackup := flag.String("verify-backup", "", "验证备份目录")
+	restoreBackup := flag.String("restore-backup", "", "从备份目录恢复")
+	restoreTo := flag.String("restore-to", "", "恢复到不存在的新目录")
+	keyPath := flag.String("key", "", "备份所对应的 secrets.key 文件")
 	flag.Parse()
+	if *backupTo != "" || *verifyBackup != "" || *restoreBackup != "" {
+		modes := 0
+		for _, v := range []string{*backupTo, *verifyBackup, *restoreBackup} {
+			if v != "" {
+				modes++
+			}
+		}
+		if modes != 1 {
+			log.Fatal("一次只能执行一个维护操作")
+		}
+		var err error
+		if *backupTo != "" {
+			if *dataDir == "" {
+				log.Fatal("备份必须显式指定 -data")
+			}
+			err = store.Backup(*dataDir, *backupTo)
+		}
+		if *verifyBackup != "" {
+
+			err = store.VerifyBackup(*verifyBackup, *keyPath)
+		}
+		if *restoreBackup != "" {
+			if *restoreTo == "" {
+				log.Fatal("必须指定 -key 和 -restore-to")
+			}
+			err = store.RestoreBackup(*restoreBackup, *keyPath, *restoreTo)
+		}
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Println("维护操作完成")
+		return
+	}
 
 	// 前端节点：不碰数据库/引擎，纯粹发静态资源 + 反代 API
 	if *frontendFor != "" {

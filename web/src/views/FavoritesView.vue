@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api'
@@ -34,6 +34,10 @@ const pageSize = ref(20)
 const total = ref(0)
 const items = ref([])
 const loading = ref(false)
+const snapshot = ref({})
+const refreshing = ref(false)
+let refreshTimer
+onUnmounted(() => { clearTimeout(refreshTimer); req.cancel() })
 const viewMode = ref('card') // card | table
 const selected = ref([])      // 选中的 comicId 列表
 const removingId = ref(null)
@@ -58,7 +62,8 @@ const {
 /** 列表请求：只认最后一次（切账号 / 翻页 / 连点搜索不会被旧响应覆盖） */
 const req = useLatestRequest()
 
-async function load() {
+async function load(force = false) {
+  clearTimeout(refreshTimer)
   if (!accountId.value) {
     items.value = []
     total.value = 0
@@ -71,12 +76,15 @@ async function load() {
       keyword: keyword.value.trim() || undefined,
       page: page.value,
       pageSize: pageSize.value,
-      signal
+      signal, refresh: force === true
     })
     if (!req.isCurrent(my)) return
     items.value = res?.items || []
     total.value = Number(res?.total) || 0
     selected.value = []
+    snapshot.value = res.snapshot || {}
+    refreshing.value = !!res.refreshing
+    if (refreshing.value) refreshTimer = setTimeout(() => load(), 2000)
   } catch (e) {
     if (e?.name === 'AbortError' || !req.isCurrent(my)) return
     items.value = []
@@ -170,7 +178,7 @@ watch(accountId, () => {
 })
 
 /* keep-alive 缓存后 onMounted 只跑一次：切回收藏页重新拉账号与列表 */
-const active = useViewActive({ onEnter: refreshAccounts })
+const active = useViewActive({ onEnter: refreshAccounts, onLeave: () => { clearTimeout(refreshTimer); req.cancel(); loading.value = false } })
 
 /** 顶栏「刷新」 */
 watch(
@@ -225,7 +233,7 @@ watch(
       </el-input>
 
       <el-button type="primary" :disabled="!accountId" :loading="loading" @click="search">搜索</el-button>
-      <el-button :disabled="!accountId" :loading="loading" @click="load">刷新</el-button>
+      <el-button :disabled="!accountId" :loading="loading" @click="load(true)">刷新</el-button>
 
       <template v-if="!isMobile">
         <el-divider direction="vertical" />
@@ -268,13 +276,16 @@ watch(
       </el-button>
     </el-alert>
     <el-alert
-      v-else-if="!loading && !items.length"
+      v-else-if="!loading && !refreshing && snapshot.hasSnapshot && !snapshot.error && !items.length"
       type="info"
       :closable="false"
       show-icon
       :title="keyword ? '没有匹配的收藏' : '这个账号暂时没有收藏'"
       class="mb10"
     />
+
+    <el-alert v-if="accountId" :type="snapshot.error ? 'warning' : 'info'" :closable="false" class="mb10"
+      :title="refreshing ? '正在后台刷新收藏，当前展示本地快照' : snapshot.error ? '刷新未完成，保留已缓存收藏：' + snapshot.error : snapshot.updatedAt ? '收藏更新于 ' + formatTime(snapshot.updatedAt, true) : '等待首次收藏刷新'" />
 
     <!-- 卡片视图（手机端固定卡片；封面 2 列自适应） -->
     <div v-if="isMobile || viewMode === 'card'" v-loading="loading" class="ms-comic-grid">

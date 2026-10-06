@@ -328,12 +328,15 @@ function onScroll() {
 function updateCurrentPage() {
   const sc = scroller.value
   if (!sc) return
-  const items = sc.querySelectorAll('.rd-item')
   const probe = sc.scrollTop + sc.clientHeight * 0.4
-  let cur = 1
-  for (const it of items) {
-    if (it.offsetTop <= probe) cur = Number(it.dataset.page)
-    else break
+  // Query the page container once; binary search only reads O(log n) offsets.
+  const container = sc.querySelector('.rd-item')?.parentElement
+  const pages = container?.children || []
+  let lo = 0, hi = pages.length - 1, cur = 1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (pages[mid].offsetTop <= probe) { cur = Number(pages[mid].dataset.page) || cur; lo = mid + 1 }
+    else hi = mid - 1
   }
   if (cur !== page.value) {
     page.value = cur

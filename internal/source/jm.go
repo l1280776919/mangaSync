@@ -64,7 +64,13 @@ type jmResult struct {
 // do 发一次请求：自动带 token 头、cookie、域名失败切换、响应解密
 func (j *JM) do(ctx context.Context, cred *Cred, method, path string, params, form url.Values, secret string, client *http.Client) (*jmResult, error) {
 	var lastErr error
-	for _, domain := range j.domainList(j.apiDomain) {
+	j.mu.Lock()
+	currentDomain := j.apiDomain
+	j.mu.Unlock()
+	for _, domain := range j.domainList(currentDomain) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		ts := time.Now().Unix()
 		u := "https://" + domain + path
 		if len(params) > 0 {
@@ -105,7 +111,10 @@ func (j *JM) do(ctx context.Context, cred *Cred, method, path string, params, fo
 			return nil, ErrAuth
 		}
 		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(raw), 120))
+			lastErr = httpFailure(path, resp.StatusCode, resp.Header)
+			if resp.StatusCode == 429 {
+				return nil, lastErr
+			}
 			continue
 		}
 
@@ -122,11 +131,11 @@ func (j *JM) do(ctx context.Context, cred *Cred, method, path string, params, fo
 			Data json.RawMessage `json:"data"`
 		}
 		if err := json.Unmarshal(raw, &env); err != nil {
-			lastErr = fmt.Errorf("响应不是 JSON: %s", truncate(string(raw), 120))
+			lastErr = responseError(path + " 响应不是 JSON")
 			continue
 		}
 		if env.Code != 200 {
-			return nil, fmt.Errorf("禁漫接口错误 code=%d %s", env.Code, truncate(string(raw), 120))
+			return nil, fmt.Errorf("禁漫接口 %s 返回 code=%d", path, env.Code)
 		}
 
 		// data 是字符串 → 需要 AES 解密
@@ -858,7 +867,13 @@ func (j *JM) Download(ctx context.Context, cred *Cred, comicID string, orders []
 		imagesTotal += len(imgs)
 		mu.Unlock()
 
-		if n, bytes := dirImageStats(dir); n >= len(imgs) {
+		if len(imgs) == 0 {
+			return res, fmt.Errorf("章节图片清单为空")
+		}
+		if err := preparePageManifest(dir, append([]string{ch.ID}, imgs...)); err != nil {
+			return res, err
+		}
+		if n, bytes := dirImageStats(dir); n == len(imgs) && completeImageFiles(dir, len(imgs)) {
 			h.log("info", fmt.Sprintf("章节《%s》已存在且完整（%d 张），跳过", ch.Title, n))
 			res.ChaptersDone++
 			res.Images += n
@@ -947,18 +962,16 @@ func (j *JM) downloadChapter(ctx context.Context, cred *Cred, photoID string, na
 			defer wg.Done()
 			for it := range jobs {
 				dst := filepath.Join(dir, fmt.Sprintf("%05d%s", it.idx+1, orDefault(filepath.Ext(it.name), ".webp")))
-				if fi, err := os.Stat(dst); err == nil && fi.Size() > 0 {
-					mu.Lock()
-					skipped++
-					mu.Unlock()
-					onImage()
-					continue
+				existing, ok := validImageFile(dst)
+				if !ok {
+					existing, ok = validImageFile(strings.TrimSuffix(dst, filepath.Ext(dst)) + ".png")
 				}
-				if alt := strings.TrimSuffix(dst, filepath.Ext(dst)) + ".png"; fileExists(alt) {
+				if ok {
 					mu.Lock()
 					skipped++
+					bytesTotal += existing
 					mu.Unlock()
-					onImage()
+					onBytes(existing)
 					continue
 				}
 
@@ -972,7 +985,19 @@ func (j *JM) downloadChapter(ctx context.Context, cred *Cred, photoID string, na
 					continue
 				}
 				num := jmSegNum(scrambleID, jmAid(photoID), it.name)
-				if _, err := jmSaveImage(raw, num, dst); err != nil {
+				if !validImageBytes(raw) {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = fmt.Errorf("图片数据不完整")
+					}
+					mu.Unlock()
+					continue
+				}
+				saved, err := jmSaveImage(raw, num, dst)
+				if err == nil {
+					err = saveImageReceipt(saved)
+				}
+				if err != nil {
 					mu.Lock()
 					if firstErr == nil {
 						firstErr = err

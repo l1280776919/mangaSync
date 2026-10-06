@@ -57,7 +57,7 @@
 - `POST /api/accounts/{id}/sync` → HTTP **202**，返回后台任务快照 `{id, accountId, status, stage, processed, total, enqueued, skipped, error}`。重复提交同一账号会复用正在执行的任务，不能把 202 当作同步已完成。
 - `GET /api/sync-status` → 各账号本进程中最近一次同步快照数组。`status` 为 `queued/running/success/partial/failed`；`stage` 为 `queued/favorites/checking/finished`。持久化结果仍从 `/api/sync-history` 读取。
 - `POST /api/downloads/sync-all` → HTTP **202**，返回各账号后台任务快照数组。
-- 手动同步与 HTTP 连接生命周期解耦，后台每轮最多 30 分钟，同时最多两个账号执行；离开页面不会取消。服务退出会取消并保存结果，重启不自动续跑被中断的同步，已入队下载保留。
+- 手动同步与 HTTP 连接生命周期解耦，后台每轮最多 30 分钟，同时最多两个账号执行；离开页面不会取消。服务退出会取消并保存结果，重启后自动续跑已保存的逐本同步项目，已入队下载保留；收藏列表尚未获取完成时，需要重新发起同步。
 
 ## 收藏
 
@@ -179,3 +179,13 @@
 ### 搜索分页说明
 
 `/api/search` 使用上游页码，`pageSize` 以响应为准：禁漫固定 80 条/页，哔咔采用响应中的 `limit`。前端不再提供上游不支持的每页条数切换。末页不足一页时不会按实际返回条数重新计算总页数。
+
+## 收藏快照与恢复（新增）
+
+- `GET /api/accounts/{id}/favorites` 立即读取本地快照；响应额外包含 `snapshot: {updatedAt, attemptAt, hasSnapshot, error}` 与 `refreshing`。首次没有快照时可以返回空 items 与 refreshing=true，不能视为账号没有收藏。
+- 同一接口 `refresh=1` 主动启动后台刷新；读取请求不等待上游完成。需要刷新进度时以不带 refresh 的请求轮询。
+- `POST /api/accounts/{id}/sync?mode=incremental|full|resume|retry`：分别为短期增量检查、强制完整核验、继续未完成项目、只重试逐本失败项。默认 incremental。同账号已有任务时复用该任务。
+- 同步快照额外返回 mode 和 errorKind；没有内存任务时返回该账号的最近持久化结果。
+- `GET /api/diagnostics`：需登录，返回网络请求聚合统计与同步状态，不含账号凭据。
+
+加密迁移与备份恢复的完整操作方式见 [运行维护说明](OPERATIONS.md)。

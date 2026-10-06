@@ -6,6 +6,7 @@ import { useAppStore } from '@/store/app'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { useLatestRequest } from '@/composables/useLatestRequest'
 import { useViewActive } from '@/composables/useViewActive'
+import { useSyncStatus } from '@/composables/useSyncStatus'
 import JobProgress from '@/components/JobProgress.vue'
 import LogDialog from '@/components/LogDialog.vue'
 import KindTag from '@/components/KindTag.vue'
@@ -20,6 +21,12 @@ import {
 } from '@/utils/format'
 
 const store = useAppStore()
+const sync = useSyncStatus(() => load())
+const syncRuns = sync.runs
+async function retrySync(run, mode) {
+  try { const result = await api.syncAccount(run.accountId, mode); syncRuns.value = { ...syncRuns.value, [run.accountId]: result }; sync.start() }
+  catch (_) { /* API reports failure */ }
+}
 /* 手机端：表格视图退化为卡片列表（宽表格在手机上无法阅读） */
 const isMobile = useIsMobile()
 
@@ -135,10 +142,12 @@ function onPageChange() {
 /* keep-alive 缓存后 onMounted 只跑一次：切回任务页重新拉一次列表 */
 const active = useViewActive({
   onEnter: () => {
+    sync.start()
     load()
     store.loadActiveJobs().catch(() => {})
   },
   onLeave: () => {
+    sync.stop()
     if (refreshTimer) {
       clearTimeout(refreshTimer)
       refreshTimer = null
@@ -180,6 +189,16 @@ const totalSpeed = computed(() =>
 </script>
 
 <template>
+  <div v-if="Object.keys(syncRuns).length" class="ms-panel">
+    <div class="ms-panel-title">收藏同步</div>
+    <div v-for="run in syncRuns" :key="run.id" class="ms-toolbar">
+      <span>账号 #{{ run.accountId }} · {{ {queued:'等待执行',running:'同步中',success:'完成',partial:'部分完成',failed:'失败'}[run.status] }}</span>
+      <span>核对 {{ run.processed }}/{{ run.total }} · 入队 {{ run.enqueued }} · 跳过 {{ run.skipped }}</span>
+      <span v-if="run.error" class="danger-text">{{ run.error }}</span>
+      <el-button v-if="!sync.isRunning(run.accountId) && run.status !== 'success'" @click="retrySync(run, 'resume')">继续同步</el-button>
+      <el-button v-if="!sync.isRunning(run.accountId) && ['failed','partial'].includes(run.status)" @click="retrySync(run, 'retry')">重试失败项</el-button>
+    </div>
+  </div>
   <div class="ms-panel">
     <div class="ms-panel-title">
       <span>

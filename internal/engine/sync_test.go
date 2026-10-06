@@ -132,7 +132,7 @@ func TestCancelingWaiterDoesNotCancelSharedManualSync(t *testing.T) {
 	started := make(chan struct{})
 	f := &syncTestSource{favorites: func(ctx context.Context) ([]*source.Comic, error) {
 		deadline, ok := ctx.Deadline()
-		if !ok || time.Until(deadline) < 29*time.Minute {
+		if !ok || time.Until(deadline) < 9*time.Minute {
 			t.Error("background task inherited a short HTTP deadline")
 		}
 		close(started)
@@ -155,5 +155,45 @@ func TestCancelingWaiterDoesNotCancelSharedManualSync(t *testing.T) {
 	awaitSync(t, e)
 	if p := e.SyncStatus()[0]; p.Status != "success" {
 		t.Fatalf("%+v", p)
+	}
+}
+
+func TestResumeOnlyProcessesUnfinishedCheckpoints(t *testing.T) {
+	e := setupEngine(t)
+	f := &syncTestSource{favorites: func(context.Context) ([]*source.Comic, error) {
+		t.Error("resume should use its persisted item list")
+		return nil, nil
+	}}
+	id := installSyncSource(t, e, f)
+	e.st.PrepareSyncItems(id, []*source.Comic{{ComicID: "done"}, {ComicID: "pending"}, {ComicID: "failed"}})
+	e.st.FinishSyncItem(id, "done", nil)
+	e.st.FinishSyncItem(id, "failed", errors.New("temporary"))
+	if _, err := e.StartAccountSyncMode(id, "resume"); err != nil {
+		t.Fatal(err)
+	}
+	awaitSync(t, e)
+	if p := e.SyncStatus()[0]; p.Status != "success" || p.Enqueued != 2 {
+		t.Fatalf("%+v", p)
+	}
+}
+func TestFreshFavoriteSnapshotAvoidsRepeatedUpstreamReads(t *testing.T) {
+	e := setupEngine(t)
+	var calls atomic.Int32
+	f := &syncTestSource{favorites: func(context.Context) ([]*source.Comic, error) {
+		calls.Add(1)
+		return []*source.Comic{{ComicID: "a", Title: "Alpha"}}, nil
+	}}
+	id := installSyncSource(t, e, f)
+	if _, err := e.RefreshFavorites(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		_, total, _, refreshing, err := e.CachedFavorites(id, "Alpha", 1, 20, false)
+		if err != nil || total != 1 || refreshing {
+			t.Fatalf("cache: %d %v", total, err)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatal("cache refetched upstream")
 	}
 }

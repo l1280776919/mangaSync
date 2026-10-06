@@ -103,13 +103,14 @@ async function submitForm() {
     saving.value = true
     try {
       if (dialogMode.value === 'create') {
-        await api.createAccount({
+        const account = await api.createAccount({
           kind: form.kind,
           username: form.username,
           password: form.password,
           label: form.label
         })
-        ElMessage.success('账号已添加并登录')
+        if(account.status === 'ok') ElMessage.success('账号已添加并登录')
+        else ElMessage.warning(`账号已保存，但登录失败：${account.error || '请测试登录'}`)
       } else {
         const patch = { label: form.label, note: form.note }
         if (form.username && form.username !== originalUsername(form.id)) patch.username = form.username
@@ -147,10 +148,10 @@ async function testLogin(row) {
   }
 }
 
-async function syncNow(row) {
+async function syncNow(row, mode = 'incremental') {
   rowBusy.value = { ...rowBusy.value, [row.id]: 'sync' }
   try {
-    const res = await api.syncAccount(row.id)
+    const res = await api.syncAccount(row.id,mode)
     syncRuns.value = { ...syncRuns.value, [row.id]: res }
     ElMessage.info('同步已在后台启动，可离开页面，进度会自动更新')
     sync.start()
@@ -286,6 +287,9 @@ watch(
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item @click="openEdit(row)">编辑</el-dropdown-item>
+                <el-dropdown-item :disabled="sync.isRunning(row.id)" @click="syncNow(row, 'resume')">继续上次同步</el-dropdown-item>
+                <el-dropdown-item :disabled="sync.isRunning(row.id)" @click="syncNow(row, 'retry')">只重试失败项</el-dropdown-item>
+                <el-dropdown-item :disabled="sync.isRunning(row.id)" @click="syncNow(row, 'full')">完整核验</el-dropdown-item>
                 <el-dropdown-item divided @click="removeAccount(row)">
                   <span class="danger-text">删除</span>
                 </el-dropdown-item>

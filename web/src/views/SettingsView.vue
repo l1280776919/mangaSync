@@ -20,6 +20,12 @@ const loading = ref(false)
 const saving = ref(false)
 const formRef = ref(null)
 const health = ref(null)
+const diagnostics = ref(null)
+const diagnosticsError = ref('')
+async function loadDiagnostics() {
+  try { diagnostics.value = await api.diagnostics(); diagnosticsError.value = '' }
+  catch (_) { diagnosticsError.value = '诊断数据获取失败，请重试' }
+}
 const newTab = ref(localStorage.getItem('ms-reader-new-tab') !== '0')
 watch(newTab, v => localStorage.setItem('ms-reader-new-tab', v ? '1' : '0'))
 
@@ -252,6 +258,19 @@ watch(
 </script>
 
 <template>
+  <div class="ms-panel">
+    <div class="ms-panel-title">网络诊断（本次运行）<el-button @click="loadDiagnostics">刷新诊断</el-button></div>
+    <el-alert v-if="diagnosticsError" :title="diagnosticsError" type="error" :closable="false" />
+    <el-table v-if="diagnostics" :data="diagnostics.network" empty-text="暂无上游请求">
+      <el-table-column prop="host" label="站点" min-width="180" />
+      <el-table-column prop="requests" label="请求数" />
+      <el-table-column prop="failures" label="HTTP / 网络失败" />
+      <el-table-column prop="averageMs" label="平均响应头耗时 ms" />
+      <el-table-column prop="lastStatus" label="最近 HTTP 状态" />
+      <el-table-column prop="lastErrorKind" label="错误类型" />
+    </el-table>
+    <p class="ms-dim">凭据已加密保存。数据备份与 secrets.key 密钥应分开保管；恢复会校验备份并使旧登录会话失效。</p>
+  </div>
   <!-- 账号安全：登录态 + 内嵌改密 + 登出（旧的 authUser/authPass「访问控制」已随 Basic 认证一并移除） -->
   <div class="ms-panel">
     <div class="ms-panel-title">
@@ -350,7 +369,7 @@ watch(
       </span>
       <div class="head-actions">
         <el-tag v-if="health" type="success" size="small" effect="light">
-          后端正常 · v{{ health.version }} · 运行 {{ Math.floor((health.uptimeSec || 0) / 60) }} 分
+          后端正常 · v{{ health.version }} · {{ (health.commit || '').slice(0, 8) }} · 运行 {{ Math.floor((health.uptimeSec || 0) / 60) }} 分
         </el-tag>
         <el-tag v-else type="info" size="small" effect="light">后端状态未知</el-tag>
         <el-button size="small" :loading="loading" @click="load">重新读取</el-button>

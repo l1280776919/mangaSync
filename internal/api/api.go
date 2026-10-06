@@ -37,6 +37,9 @@ func NewServer(st *store.Store, cfg *config.Manager, eng *engine.Engine) *Server
 func (s *Server) Routes() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /api/health", s.health)
+	m.HandleFunc("GET /api/diagnostics", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"network": source.NetworkStats(), "sync": s.eng.SyncStatus()})
+	})
 	m.HandleFunc("GET /api/reading", s.readingHistory)
 	m.HandleFunc("GET /api/reading/{kind}/{comicId}", s.getReading)
 	m.HandleFunc("PUT /api/reading/{kind}/{comicId}", s.putReading)
@@ -325,7 +328,11 @@ func (s *Server) syncAccount(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "%v", err)
 		return
 	}
-	run, err := s.eng.StartAccountSync(acc.ID)
+	mode := r.URL.Query().Get("mode")
+	if mode == "" {
+		mode = "incremental"
+	}
+	run, err := s.eng.StartAccountSyncMode(acc.ID, mode)
 	if err != nil {
 		writeErr(w, 400, "启动同步失败: %v", err)
 		return
@@ -373,46 +380,14 @@ func (s *Server) favorites(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "%v", err)
 		return
 	}
-	_, cred, src, err := s.accountFor(r, acc)
+	page, size := pageParams(r, 50)
+	items, total, state, refreshing, err := s.eng.CachedFavorites(acc.ID, strings.TrimSpace(r.URL.Query().Get("keyword")), page, size, r.URL.Query().Get("refresh") == "1")
 	if err != nil {
-		writeErr(w, 400, "%v", err)
+		writeErr(w, 500, "读取收藏快照失败: %v", err)
 		return
 	}
-	fctx, fcancel := ctxTimeout(r, 3*time.Minute)
-	defer fcancel()
-	favs, err := src.Favorites(fctx, cred)
-	if err != nil {
-		// 第 1 页就失败 → 没有任何数据可给；中途失败 → 源会返回已取到的部分，
-		// 这里带着部分结果继续（避免「收藏多的账号拉一半就整页报错」）
-		if len(favs) == 0 {
-			if err == source.ErrAuth {
-				_ = s.st.SaveLoginErr(acc.ID, "登录态失效")
-			}
-			writeErr(w, 400, "%v", err)
-			return
-		}
-	}
-
-	kw := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("keyword")))
-	if kw != "" {
-		filtered := make([]*source.Comic, 0, len(favs))
-		for _, c := range favs {
-			if strings.Contains(strings.ToLower(c.Title), kw) || strings.Contains(strings.ToLower(c.Author), kw) ||
-				strings.Contains(c.ComicID, kw) {
-				filtered = append(filtered, c)
-			}
-		}
-		favs = filtered
-	}
-	page, size := pageParams(r, 50)
-	total := len(favs)
-	start, end := pageBounds(total, page, size)
-	// 只给当前页补本地下载状态：原来在分页前对「全量收藏」逐条查库
-	// （SQLite 是单连接串行，2000 条收藏 = 2000 次查询，翻第 2 页还要重跑一遍）
-	s.decorate(favs[start:end])
-	writeJSON(w, 200, map[string]any{
-		"total": total, "page": page, "pageSize": size, "items": favs[start:end],
-	})
+	s.decorate(items)
+	writeJSON(w, 200, map[string]any{"items": items, "total": total, "page": page, "pageSize": size, "snapshot": state, "refreshing": refreshing})
 }
 
 func (s *Server) addFavorite(w http.ResponseWriter, r *http.Request) {
@@ -439,6 +414,7 @@ func (s *Server) addFavorite(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "加入收藏失败: %v", err)
 		return
 	}
+	_ = s.st.InvalidateFavorites(acc.ID)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -460,6 +436,7 @@ func (s *Server) delFavorite(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "取消收藏失败: %v", err)
 		return
 	}
+	_ = s.st.InvalidateFavorites(acc.ID)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 

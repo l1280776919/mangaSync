@@ -19,3 +19,7 @@ __pycache__/
 cache/
 
 /dist/
+
+web/test-results/
+web/playwright-report/
+secrets.key

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"crypto/cipher"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -12,7 +13,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db    *sql.DB
+	vault cipher.AEAD
+}
 
 type Account struct {
 	ID             int64  `json:"id"`
@@ -79,7 +83,7 @@ func Open(dir string) (*Store, error) {
 	dbPath := filepath.Join(dir, "mangasync.db")
 	// wal_autocheckpoint(200)：WAL 累积到约 200 页就自动 checkpoint，避免 -wal 无限增长
 	db, err := sql.Open("sqlite", dbPath+
-		"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=wal_autocheckpoint(200)")
+		"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=wal_autocheckpoint(200)&_pragma=secure_delete(ON)")
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +96,11 @@ func Open(dir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	// 库里存着漫画站明文密码与 30 天会话 token，必须比 config.json 更严：0600
+	if err := s.initVault(dir); err != nil {
+		db.Close()
+		return nil, err
+	}
+	// 凭据密文及会话数据库仅供运行用户访问。
 	chmodPrivate(dbPath)
 	return s, nil
 }
@@ -223,14 +231,25 @@ func (s *Store) GetAccount(id int64) (*Account, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.Password, a.Token = pw, tk
+	a.Password, err = s.decrypt(pw)
+	if err != nil {
+		return nil, err
+	}
+	a.Token, err = s.decrypt(tk)
+	if err != nil {
+		return nil, err
+	}
 	return a, nil
 }
 
 func (s *Store) CreateAccount(a *Account) (int64, error) {
 	a.CreatedAt = now()
+	password, err := s.encrypt(a.Password)
+	if err != nil {
+		return 0, err
+	}
 	res, err := s.db.Exec(`insert into accounts(kind,username,password,label,note,status,created_at)
-		values(?,?,?,?,?,?,?)`, a.Kind, a.Username, a.Password, a.Label, a.Note, "unknown", a.CreatedAt)
+		values(?,?,?,?,?,?,?)`, a.Kind, a.Username, password, a.Label, a.Note, "unknown", a.CreatedAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return 0, fmt.Errorf("该源下已存在同名账号")
@@ -249,7 +268,11 @@ func (s *Store) UpdateAccount(id int64, label, note, username, password string) 
 	}
 	if password != "" {
 		sets = append(sets, "password=?")
-		args = append(args, password)
+		encrypted, err := s.encrypt(password)
+		if err != nil {
+			return err
+		}
+		args = append(args, encrypted)
 	}
 	args = append(args, id)
 	_, err := s.db.Exec("update accounts set "+strings.Join(sets, ",")+" where id=?", args...)
@@ -262,8 +285,12 @@ func (s *Store) DeleteAccount(id int64) error {
 }
 
 func (s *Store) SaveLoginOK(id int64, token, nickname string, level, favCount, favMax int) error {
-	_, err := s.db.Exec(`update accounts set token=?,nickname=?,level=?,favorites_count=?,favorites_max=?,
-		status='ok',error='',last_login_at=? where id=?`, token, nickname, level, favCount, favMax, now(), id)
+	encrypted, err := s.encrypt(token)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`update accounts set token=?,nickname=?,level=?,favorites_count=?,favorites_max=?,
+		status='ok',error='',last_login_at=? where id=?`, encrypted, nickname, level, favCount, favMax, now(), id)
 	return err
 }
 

@@ -84,7 +84,7 @@ func newHTTPClient(proxy string, timeout time.Duration) *http.Client {
 			tr.Proxy = http.ProxyURL(u)
 		}
 	}
-	return &http.Client{Timeout: timeout, Transport: priorityTransport{base: tr}}
+	return &http.Client{Timeout: timeout, Transport: observedTransport{base: priorityTransport{base: tr}}}
 }
 
 func (p *Pica) Kind() string { return "pica" }
@@ -154,16 +154,23 @@ func (p *Pica) apiCall(ctx context.Context, method, path, token string, body any
 			return nil, fmt.Errorf("哔咔响应 %s 超过 8 MiB 限制", path)
 		}
 		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
-			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			lastErr = httpFailure(path, resp.StatusCode, resp.Header)
 			if attempt < 2 {
-				if err := picaRetryWait(ctx, time.Duration(attempt+1)*1500*time.Millisecond); err != nil {
+				delay := time.Duration(1<<attempt) * 1500 * time.Millisecond
+				if upstream, ok := lastErr.(*UpstreamError); ok && upstream.RetryAfter > delay {
+					delay = upstream.RetryAfter
+				}
+				if delay > 2*time.Minute {
+					return nil, lastErr
+				}
+				if err := picaRetryWait(ctx, delay); err != nil {
 					return nil, err
 				}
 			}
 			continue
 		}
 		if resp.StatusCode != 200 {
-			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(raw), 200))
+			return nil, httpFailure(path, resp.StatusCode, resp.Header)
 		}
 		var env struct {
 			Code    int             `json:"code"`
@@ -180,7 +187,7 @@ func (p *Pica) apiCall(ctx context.Context, method, path, token string, body any
 			return nil, ErrAuth
 		}
 		if env.Code != 200 {
-			return nil, fmt.Errorf("code=%d %s %s", env.Code, env.Message, env.Detail)
+			return nil, fmt.Errorf("哔咔接口 %s 返回 code=%d", path, env.Code)
 		}
 		if len(bytes.TrimSpace(env.Data)) == 0 || bytes.Equal(bytes.TrimSpace(env.Data), []byte("null")) {
 			return nil, fmt.Errorf("哔咔响应 %s 声称成功但缺少 data（HTTP 200，code=200），请检查接口或代理", path)
@@ -605,9 +612,15 @@ func (p *Pica) fetchImage(ctx context.Context, u string, _ string, _ string) ([]
 			time.Sleep(time.Duration(attempt+1) * 800 * time.Millisecond)
 			continue
 		}
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+		b, readErr := io.ReadAll(io.LimitReader(resp.Body, (64<<20)+1))
 		ct := resp.Header.Get("Content-Type")
 		resp.Body.Close()
+		if readErr != nil {
+			return nil, "", readErr
+		}
+		if len(b) > 64<<20 {
+			return nil, "", fmt.Errorf("图片超过大小限制")
+		}
 		if resp.StatusCode != 200 {
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			time.Sleep(time.Duration(attempt+1) * 800 * time.Millisecond)
@@ -646,6 +659,10 @@ func (p *Pica) chapterImageURLs(ctx context.Context, cred *Cred, comicID string,
 	if err != nil {
 		return nil, err
 	}
+	if first.Pages < 1 || first.Pages > 500 || first.Total < 0 {
+		return nil, fmt.Errorf("图片列表分页信息不合法")
+	}
+
 	type pageResp struct {
 		page int
 		docs []picaPageDoc
@@ -669,7 +686,16 @@ func (p *Pica) chapterImageURLs(ctx context.Context, cred *Cred, comicID string,
 		wg.Add(1)
 		go func(pg int) {
 			defer wg.Done()
-			sem <- struct{}{}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = ctx.Err()
+				}
+				mu.Unlock()
+				return
+			}
 			defer func() { <-sem }()
 			pr, err := getPage(pg)
 			if err != nil {
@@ -682,6 +708,11 @@ func (p *Pica) chapterImageURLs(ctx context.Context, cred *Cred, comicID string,
 			}
 			var docs []picaPageDoc
 			if err := json.Unmarshal(pr.Docs, &docs); err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("图片列表第 %d 页格式异常: %w", pg, err)
+				}
+				mu.Unlock()
 				return
 			}
 			collect(pg, docs)
@@ -702,10 +733,15 @@ func (p *Pica) chapterImageURLs(ctx context.Context, cred *Cred, comicID string,
 	var urls []string
 	for _, r := range results {
 		for _, d := range r.docs {
-			if u := d.Media.URL(); u != "" {
-				urls = append(urls, u)
+			u := d.Media.URL()
+			if u == "" {
+				return nil, fmt.Errorf("图片列表第 %d 页存在缺失地址", r.page)
 			}
+			urls = append(urls, u)
 		}
+	}
+	if first.Total > 0 && len(urls) != first.Total {
+		return nil, fmt.Errorf("图片列表不完整：期望 %d，收到 %d", first.Total, len(urls))
 	}
 	return urls, nil
 }
@@ -768,7 +804,7 @@ func (p *Pica) Download(ctx context.Context, cred *Cred, comicID string, orders 
 			continue
 		}
 		// 已完整则跳过
-		if n, b := dirImageStats(cpath); n >= len(urls) {
+		if n, b := dirImageStats(cpath); n == len(urls) && pageManifestMatches(cpath, append([]string{comicID, ch.ID}, urls...)) && completeImageFiles(cpath, len(urls)) {
 			h.log("info", fmt.Sprintf("  %s 已存在且完整(%d 张)，跳过", cname, n))
 			total.ChaptersDone++
 			total.ImagesDone += n
@@ -781,22 +817,19 @@ func (p *Pica) Download(ctx context.Context, cred *Cred, comicID string, orders 
 			continue
 		}
 
-		tmp := filepath.Join(cdir, tmpDirName(cname, h.JobID))
-		os.RemoveAll(tmp)
-		if err := os.MkdirAll(tmp, 0o755); err != nil {
+		tmp := filepath.Join(cdir, "."+cname+".resume")
+		if err := preparePageManifest(tmp, append([]string{comicID, ch.ID}, urls...)); err != nil {
 			return res, err
 		}
 		n, b, err := p.downloadImages(ctx, urls, tmp, h, total)
 		if err != nil {
-			os.RemoveAll(tmp)
 			failedChapters = append(failedChapters, fmt.Sprintf("%d %s", ch.Order, ch.Title))
 			h.chap(ChapterState{Order: ch.Order, Title: ch.Title, State: "failed", Err: err.Error()})
 			h.log("error", fmt.Sprintf("章节 %d 下载失败: %v", ch.Order, err))
 			continue
 		}
-		os.RemoveAll(cpath)
-		if err := os.Rename(tmp, cpath); err != nil {
-			os.RemoveAll(tmp)
+		if err := commitChapter(tmp, cpath); err != nil {
+			failedChapters = append(failedChapters, fmt.Sprintf("%d %s(提交失败)", ch.Order, ch.Title))
 			h.chap(ChapterState{Order: ch.Order, Title: ch.Title, State: "failed", Err: err.Error()})
 			continue
 		}
@@ -825,23 +858,31 @@ func (p *Pica) downloadImages(ctx context.Context, urls []string, dir string, h 
 	jobs := make(chan job)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	var imagesDone, imagesTotal = 0, 0
+	var imagesDone, imagesTotal = 0, len(urls)
 	var bytesDone int64
 	var failed []string
 	start := time.Now()
 
 	write := func(idx int, url string) error {
+		dst := filepath.Join(dir, fmt.Sprintf("%03d%s", idx, imgExtFromURL(url)))
+		if n, ok := validImageFile(dst); ok {
+			mu.Lock()
+			imagesDone++
+			bytesDone += n
+			mu.Unlock()
+			return nil
+		}
 		b, _, err := p.fetchImage(ctx, url, "", "")
 		if err != nil {
 			return err
 		}
-		ext := imgExtFromURL(url)
-		dst := filepath.Join(dir, fmt.Sprintf("%03d%s", idx, ext))
-		tmp := dst + ".part"
-		if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		if !validImageBytes(b) {
+			return fmt.Errorf("第 %d 页图片不完整或格式不支持", idx)
+		}
+		if err = writeFileAtomic(dst, b); err != nil {
 			return err
 		}
-		if err := os.Rename(tmp, dst); err != nil {
+		if err = saveImageReceipt(dst); err != nil {
 			return err
 		}
 		mu.Lock()

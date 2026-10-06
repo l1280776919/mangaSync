@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"github.com/l1280776919/mangaSync/internal/source"
 	"time"
 )
 
@@ -11,6 +12,8 @@ type SyncProgress struct {
 	ID        int64  `json:"id"`
 	AccountID int64  `json:"accountId"`
 	Status    string `json:"status"`
+	Mode      string `json:"mode"`
+	ErrorKind string `json:"errorKind"`
 	Stage     string `json:"stage"`
 	Processed int    `json:"processed"`
 	Total     int    `json:"total"`
@@ -26,7 +29,7 @@ type syncJob struct {
 
 func activeSync(s string) bool { return s == "queued" || s == "running" }
 
-func (e *Engine) launchSync(parent context.Context, id int64) (*syncJob, error) {
+func (e *Engine) launchSync(parent context.Context, id int64, mode string) (*syncJob, error) {
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
 	if j := e.syncJobs[id]; j != nil && activeSync(j.progress.Status) {
@@ -42,7 +45,7 @@ func (e *Engine) launchSync(parent context.Context, id int64) (*syncJob, error) 
 	if err != nil {
 		return nil, err
 	}
-	j := &syncJob{progress: SyncProgress{ID: runID, AccountID: id, Status: "queued", Stage: "queued"}, done: make(chan struct{})}
+	j := &syncJob{progress: SyncProgress{ID: runID, AccountID: id, Status: "queued", Stage: "queued", Mode: mode}, done: make(chan struct{})}
 	e.syncJobs[id] = j
 	go func() {
 		ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
@@ -52,7 +55,7 @@ func (e *Engine) launchSync(parent context.Context, id int64) (*syncJob, error) 
 		select {
 		case e.syncSlots <- struct{}{}:
 			e.updateSync(id, "favorites", 0, 0, 0, 0)
-			enq, skip, runErr = e.syncAccount(ctx, id)
+			enq, skip, runErr = e.syncAccount(ctx, id, mode)
 			<-e.syncSlots
 		case <-ctx.Done():
 			runErr = ctx.Err()
@@ -69,6 +72,7 @@ func (e *Engine) launchSync(parent context.Context, id int64) (*syncJob, error) 
 				j.progress.Status = "partial"
 			}
 			j.progress.Error = runErr.Error()
+			j.progress.ErrorKind = source.ErrorKind(runErr)
 		}
 		j.progress.Stage = "finished"
 		j.err = runErr
@@ -82,10 +86,16 @@ func (e *Engine) launchSync(parent context.Context, id int64) (*syncJob, error) 
 
 // StartAccountSync is detached from the initiating HTTP request, but stops on service shutdown.
 func (e *Engine) StartAccountSync(id int64) (SyncProgress, error) {
+	return e.StartAccountSyncMode(id, "incremental")
+}
+func (e *Engine) StartAccountSyncMode(id int64, mode string) (SyncProgress, error) {
+	if mode != "incremental" && mode != "full" && mode != "resume" && mode != "retry" {
+		return SyncProgress{}, fmt.Errorf("同步模式不合法")
+	}
 	e.syncMu.Lock()
 	ctx := e.lifeCtx
 	e.syncMu.Unlock()
-	j, err := e.launchSync(ctx, id)
+	j, err := e.launchSync(ctx, id, mode)
 	if err != nil {
 		return SyncProgress{}, err
 	}
@@ -96,7 +106,7 @@ func (e *Engine) StartAccountSync(id int64) (SyncProgress, error) {
 
 // Scheduled sync shares the same run as a manual sync already in progress.
 func (e *Engine) SyncAccount(ctx context.Context, id int64) (int, int, error) {
-	j, err := e.launchSync(ctx, id)
+	j, err := e.launchSync(ctx, id, "incremental")
 	if err != nil {
 		return 0, 0, err
 	}
@@ -123,10 +133,21 @@ func (e *Engine) updateSync(id int64, stage string, processed, total, enq, skip 
 }
 func (e *Engine) SyncStatus() []SyncProgress {
 	e.syncMu.Lock()
-	defer e.syncMu.Unlock()
 	out := make([]SyncProgress, 0, len(e.syncJobs))
+	seen := map[int64]bool{}
 	for _, j := range e.syncJobs {
 		out = append(out, j.progress)
+		seen[j.progress.AccountID] = true
+	}
+	e.syncMu.Unlock()
+	if history, err := e.st.SyncHistory(); err == nil {
+		for _, r := range history {
+			if seen[r.AccountID] {
+				continue
+			}
+			seen[r.AccountID] = true
+			out = append(out, SyncProgress{ID: r.ID, AccountID: r.AccountID, Status: r.Status, Stage: "finished", Enqueued: r.Enqueued, Skipped: r.Skipped, Error: r.Error})
+		}
 	}
 	return out
 }

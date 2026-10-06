@@ -9,6 +9,10 @@ import (
 
 func (s *Store) migrateFeatures() error {
 	for _, q := range []string{
+		`create table if not exists favorite_state(account_id integer primary key,updated_at text default '',attempt_at text default '',error text default '',has_snapshot integer default 0)`,
+		`create table if not exists favorite_items(account_id integer,comic_id text,title text,author text,data text,primary key(account_id,comic_id))`,
+		`create table if not exists sync_items(account_id integer,comic_id text,data text,status text,error text default '',updated_at text,primary key(account_id,comic_id))`,
+		`create table if not exists comic_checks(kind text,comic_id text,chapters integer,fingerprint text,checked_at text,primary key(kind,comic_id))`,
 		`create table if not exists chapter_checks(kind text, comic_id text, chapter_order integer, remote_id text, images integer, path text, primary key(kind,comic_id,chapter_order))`,
 		`create table if not exists sync_runs(id integer primary key, account_id integer, started_at text, finished_at text default '', status text, enqueued integer default 0, skipped integer default 0, error text default '')`,
 		`create table if not exists reading_progress(user_id integer,kind text,comic_id text,title text,chapter_order integer,page integer,updated_at integer,primary key(user_id,kind,comic_id))`,
