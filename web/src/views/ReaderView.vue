@@ -69,19 +69,16 @@
     >
       <div class="rd-pages">
         <div v-for="p in pageList" :key="kind + comicId + order + ':' + p" class="rd-item" :data-page="p" :style="itemStyle(p)">
-          <img
+          <ReaderPageImage
             v-if="shouldRender(p)"
-            :src="pageUrl(p)"
-            :alt="'第 ' + p + ' 页'"
-            decoding="async"
-            :loading="Math.abs(p - page) <= 1 ? 'eager' : 'lazy'"
-            :fetchpriority="p === page ? 'high' : 'auto'"
-            :class="{ 'is-loaded': loaded[p] }"
+            :src="imageUrl(p)"
+            :page="p"
+            :failed="!!failed[p]"
+            :priority="p === page ? 'high' : 'auto'"
             @load="onLoaded(p, $event)"
             @error="onError(p, $event)"
           />
-          <!-- 未加载时的占位（撑住高度，滚动位置不跳） -->
-          <div v-if="!loaded[p] && !failed[p]" class="rd-ph"><span>{{ p }}</span></div>
+          <div v-else class="rd-ph"><span>{{ p }}</span></div>
           <div v-if="failed[p]" class="rd-bad">
             第 {{ p }} 页加载失败
             <el-button text size="small" @click.stop="retry(p)">重试</el-button>
@@ -139,6 +136,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import api from '@/api'
+import ReaderPageImage from '@/components/ReaderPageImage.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 
 import { auth } from '@/store/auth'
@@ -164,6 +162,8 @@ const loading = ref(true)
 const loadError = ref('')
 const failed = reactive({})
 const loaded = reactive({})
+const imageAttempts = reactive({})
+const visibleRange = reactive({ start: 1, end: 1 })
 
 /** 后端给的每页像素尺寸（本地/缓存命中时才有），用于精确占位 */
 const sizes = ref([])
@@ -221,7 +221,7 @@ const WINDOW_AHEAD = 4
 
 function shouldRender(p) {
   const cur = page.value || 1
-  return p >= cur - WINDOW_BEHIND && p <= cur + WINDOW_AHEAD
+  return (p >= cur - WINDOW_BEHIND && p <= cur + WINDOW_AHEAD) || (p >= visibleRange.start && p <= visibleRange.end)
 }
 
 const DEFAULT_RATIO = '2 / 3' // 拿不到真实尺寸时的兜底比例（常见漫画页）
@@ -233,6 +233,8 @@ const chapLabel = (ch) => {
 
 const pageUrl = (p) =>
   `/api/reader/${kind.value}/${encodeURIComponent(comicId.value)}/${order.value}/page/${p}`
+
+const imageUrl = p => pageUrl(p) + (imageAttempts[p] ? `?retry=${imageAttempts[p]}` : '')
 
 const storeKey = computed(() => `ms-reader:${auth.user?.username || "local"}:${kind.value}:${comicId.value}`)
 
@@ -290,6 +292,8 @@ async function load() {
   loadError.value = ''
   Object.keys(failed).forEach((k) => delete failed[k])
   Object.keys(loaded).forEach((k) => delete loaded[k])
+  Object.keys(imageAttempts).forEach(k => delete imageAttempts[k])
+  visibleRange.start = visibleRange.end = 1
   Object.keys(preloading).forEach((k) => delete preloading[k])
   // 上一章测出来的真实尺寸也要清：否则新章节的占位比例会沿用上一章的数字
   Object.keys(natSize).forEach((k) => delete natSize[k])
@@ -331,7 +335,7 @@ async function load() {
     loadError.value = e?.message || '加载失败'
   } finally {
     // 只有最后一次 load 有权关掉 loading（否则新请求还在跑，骨架屏就没了）
-    if (my === gen) loading.value = false
+    if (my === gen) { loading.value = false; await nextTick(); if (my === gen) updateCurrentPage() }
   }
 }
 
@@ -355,6 +359,7 @@ function scrollToPage(p, smooth = false) {
   if (!el) return
   scroller.value.scrollTo({ top: Math.max(0, el.offsetTop - 58), behavior: smooth ? 'smooth' : 'auto' })
   page.value = p
+  visibleRange.start = visibleRange.end = p
 }
 
 /** 滚动时更新「当前页」并记录进度（rAF 节流，避免每帧跑 querySelectorAll） */
@@ -375,12 +380,19 @@ function updateCurrentPage() {
   // Query the page container once; binary search only reads O(log n) offsets.
   const container = sc.querySelector('.rd-item')?.parentElement
   const pages = container?.children || []
-  let lo = 0, hi = pages.length - 1, cur = 1
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1
-    if (pages[mid].offsetTop <= probe) { cur = Number(pages[mid].dataset.page) || cur; lo = mid + 1 }
-    else hi = mid - 1
+  function pageAt(y) {
+    let lo = 0, hi = pages.length - 1, result = 1
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      if (pages[mid].offsetTop <= y) { result = Number(pages[mid].dataset.page) || result; lo = mid + 1 }
+      else hi = mid - 1
+    }
+    return result
   }
+  // Cover the actual viewport as well as nearby page numbers (short/landscape pages).
+  visibleRange.start = pageAt(Math.max(0, sc.scrollTop - sc.clientHeight * 0.5))
+  visibleRange.end = pageAt(sc.scrollTop + sc.clientHeight * 1.5)
+  const cur = pageAt(probe)
   if (cur !== page.value) {
     page.value = cur
     clearTimeout(saveTimer)
@@ -414,18 +426,20 @@ function setNaturalSize(p, w, h) {
   const sc = scroller.value
   const anchor = sc?.querySelector(`.rd-item[data-page="${page.value}"]`)
   const before = anchor?.offsetTop
+  const anchorPage = page.value
+  const beforeScroll = sc?.scrollTop
   const my = gen
   natSize[p] = [w, h]
   if (anchoring || !anchor || p >= page.value) return
   anchoring = true
   nextTick(() => {
     anchoring = false
-    if (!disposed && my === gen && sc && anchor.isConnected) sc.scrollTop += anchor.offsetTop - before
+    if (!disposed && my === gen && sc && anchor.isConnected && page.value === anchorPage && Math.abs(sc.scrollTop - beforeScroll) < 1) sc.scrollTop += anchor.offsetTop - before
   })
 }
 
 function onLoaded(p, e) {
-  if (disposed || !ready || !e?.target?.src?.includes(pageUrl(p))) return
+  if (disposed || !ready || !e?.target?.isConnected || !e.target.src.includes(pageUrl(p))) return
   loaded[p] = true
   delete failed[p]
   const im = e?.target
@@ -433,7 +447,8 @@ function onLoaded(p, e) {
   if (p === page.value) preload(p)
 }
 function onError(p, e) {
-  if (disposed || !ready || !e?.target?.src?.includes(pageUrl(p))) return
+  if (disposed || !ready || !e?.target?.isConnected || !e.target.src.includes(pageUrl(p))) return
+  delete loaded[p]
   if (!retriedTimes[p]) {
     retriedTimes[p] = 1
     const my = gen
@@ -451,8 +466,8 @@ function onError(p, e) {
 function retry(p) {
   delete failed[p]
   preloading[p] = false
-  const el = scroller.value?.querySelector(`.rd-item[data-page="${p}"] img`)
-  if (el) el.src = pageUrl(p) + '?t=' + Date.now()
+  delete loaded[p]
+  imageAttempts[p] = (imageAttempts[p] || 0) + 1
 }
 
 function flip(dir) {
@@ -500,8 +515,7 @@ async function repairChapter() {
 }
 function back() {
   saveProgress()
-  if (window.history.length > 1) router.back()
-  else router.replace('/favorites')
+  router.replace('/library')
 }
 
 /* ---------- 点按手势：左/右翻页、中间切换工具栏 ---------- */
@@ -774,7 +788,7 @@ onBeforeUnmount(() => {
   background: #1b1e24;
 }
 /* 图片绝对定位铺满占位块：占位比例与图片一致时无变形 */
-.rd-item img {
+.rd-item :deep(img) {
   image-rendering: auto;
   position: absolute;
   inset: 0;
@@ -783,9 +797,9 @@ onBeforeUnmount(() => {
   object-fit: contain;
   display: block;
   opacity: 0;
-  transition: opacity 0.18s ease;
+  transition: none;
 }
-.rd-item img.is-loaded {
+.rd-item :deep(img).is-loaded {
   opacity: 1;
 }
 .rd-fit-width .rd-item {
@@ -796,7 +810,7 @@ onBeforeUnmount(() => {
   min-height: 200px;
   scroll-snap-align: start;
 }
-.rd-fit-height .rd-item img {
+.rd-fit-height .rd-item :deep(img) {
   image-rendering: auto;
   object-fit: contain;
 }
@@ -805,13 +819,13 @@ onBeforeUnmount(() => {
   max-width: none;
   margin: 0 auto;
 }
-.rd-fit-original .rd-item img {
+.rd-fit-original .rd-item :deep(img) {
   image-rendering: auto;
   object-fit: contain;
 }
 
 /* 占位骨架 */
-.rd-ph {
+:deep(.rd-ph) {
   position: absolute;
   inset: 0;
   z-index: 1;
@@ -824,7 +838,7 @@ onBeforeUnmount(() => {
   background-size: 200% 100%;
   animation: rd-shimmer 1.5s linear infinite;
 }
-.rd-dark .rd-ph {
+.rd-dark :deep(.rd-ph) {
   color: #5f6774;
   background: linear-gradient(100deg, #20242b 30%, #272c35 50%, #20242b 70%);
   background-size: 200% 100%;

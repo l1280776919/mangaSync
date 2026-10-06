@@ -48,6 +48,7 @@ test('reader shows images and supports chapter navigation',async({page})=>{
  await expect(page.locator('.rd-item img').first()).toBeVisible()
  await page.locator('.el-select').first().click();await page.getByRole('option',{name:/第二章/}).click()
  await expect(page).toHaveURL(/test-book\/2/)
+ await page.locator('.rd-back').click();await expect(page).toHaveURL(/library/)
 })
 test('search reports upstream failure and recovers after network interruption',async({page,context})=>{
  await mockBackend(page,{searchError:true});await page.goto('/#/search')
@@ -91,5 +92,6 @@ test('phone reader fits narrow screens and provides chapter and page navigation'
  await expect(page.getByRole('spinbutton',{name:'当前页码'})).toHaveValue('1')
  await expect(page.getByRole('dialog')).not.toBeVisible()
  await page.screenshot({path:'test-results/reader-mobile.png'})
+ await page.locator('.rd-back').tap();await expect(page).toHaveURL(/library/)
  await context.close()
 })
