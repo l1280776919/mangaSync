@@ -28,6 +28,10 @@ const (
 // **去掉扩展名**的部分（00001.webp → "00001"）。用带扩展名的文件名做 key 会算出
 // 错误的段数（2026-09-22 修：1238381 的首页应为 16 段而旧代码算成 8 段，整本乱序错位）。
 func jmSegNum(scrambleID, aid int, filename string) int {
+	// JM GIFs are not scrambled. Decoding/re-encoding would also discard animation.
+	if strings.EqualFold(filepath.Ext(filename), ".gif") {
+		return 0
+	}
 	if aid < scrambleID {
 		return 0
 	}

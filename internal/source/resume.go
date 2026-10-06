@@ -27,7 +27,7 @@ func validImageBytes(b []byte) bool {
 }
 func validImageFile(path string) (int64, bool) {
 	b, err := os.ReadFile(path)
-	if err != nil || len(b) == 0 {
+	if err != nil || len(b) == 0 || (strings.EqualFold(filepath.Ext(path), ".gif") && !isGIFBytes(b)) {
 		return 0, false
 	}
 	sum := fmt.Sprintf("%x", sha256.Sum256(b))
@@ -187,4 +187,23 @@ func seedChapterRepair(src, dst string, ids []string, urls []string) error {
 		}
 	}
 	return nil
+}
+
+// IsLegacyJMGIF identifies files produced when JM GIFs were incorrectly
+// descrambled and encoded as WebP/PNG while retaining the .gif suffix.
+func IsLegacyJMGIF(path string) bool {
+	if !strings.EqualFold(filepath.Ext(path), ".gif") {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	var header [6]byte
+	n, err := f.Read(header[:])
+	return err != nil || n != len(header) || !isGIFBytes(header[:])
+}
+func isGIFBytes(b []byte) bool {
+	return len(b) >= 6 && (string(b[:6]) == "GIF87a" || string(b[:6]) == "GIF89a")
 }

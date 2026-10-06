@@ -17,6 +17,7 @@ import (
 
 	_ "golang.org/x/image/webp"
 
+	"github.com/l1280776919/mangaSync/internal/source"
 	"github.com/l1280776919/mangaSync/internal/store"
 )
 
@@ -88,7 +89,7 @@ func (s *Server) readerPage(w http.ResponseWriter, r *http.Request) {
 	if dir, ok := s.localChapterDir(kind, comicID, order); ok {
 		if files := cachedImageFiles(dir); page <= len(files) {
 			target := files[page-1]
-			if fi, err := os.Stat(target); err == nil && !fi.IsDir() && fi.Size() > 0 {
+			if fi, err := os.Stat(target); err == nil && !fi.IsDir() && fi.Size() > 0 && !(kind == "jm" && source.IsLegacyJMGIF(target)) {
 				serveCachedFile(w, r, target, fi)
 				return
 			}
@@ -218,6 +219,10 @@ func sizesOf(files []string) [][2]int {
 
 // readerCacheDir 阅读器回源缓存目录（未下载的章节回源后落盘在这里）
 func (s *Server) readerCacheDir(kind, comicID string, order int) string {
+	// Old JM caches may contain incorrectly descrambled GIFs saved as WebP.
+	if kind == "jm" {
+		kind = "jm-gif-v2"
+	}
 	return filepath.Join(s.base, "reader", kind, safeName(comicID), fmt.Sprintf("%03d", order))
 }
 

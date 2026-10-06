@@ -876,7 +876,7 @@ func (j *JM) Download(ctx context.Context, cred *Cred, comicID string, orders []
 		if err := preparePageManifest(dir, append([]string{ch.ID}, imgs...)); err != nil {
 			return res, err
 		}
-		if n, bytes := dirImageStats(dir); n == len(imgs) && completeImageFiles(dir, len(imgs)) {
+		if n, bytes := dirImageStats(dir); n == len(imgs) && jmChapterImagesComplete(dir, imgs) {
 			h.log("info", fmt.Sprintf("章节《%s》已存在且完整（%d 张），跳过", ch.Title, n))
 			res.ChaptersDone++
 			res.Verified[ch.Order] = len(imgs)
@@ -975,7 +975,7 @@ func (j *JM) downloadChapter(ctx context.Context, cred *Cred, photoID string, na
 			for it := range jobs {
 				dst := filepath.Join(dir, fmt.Sprintf("%05d%s", it.idx+1, orDefault(filepath.Ext(it.name), ".webp")))
 				existing, ok := validImageFile(dst)
-				if !ok {
+				if !ok && !strings.EqualFold(filepath.Ext(it.name), ".gif") {
 					existing, ok = validImageFile(strings.TrimSuffix(dst, filepath.Ext(dst)) + ".png")
 				}
 				if ok {
@@ -1005,6 +1005,12 @@ func (j *JM) downloadChapter(ctx context.Context, cred *Cred, photoID string, na
 					}
 					mu.Unlock()
 					continue
+				}
+				if strings.EqualFold(filepath.Ext(it.name), ".gif") {
+					// Remove the old PNG fallback only after the replacement GIF is saved.
+					old := strings.TrimSuffix(dst, filepath.Ext(dst)) + ".png"
+					_ = os.Remove(old)
+					_ = os.Remove(old + ".sha256")
 				}
 				mu.Lock()
 				done++
@@ -1149,4 +1155,15 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func jmChapterImagesComplete(dir string, names []string) bool {
+	for i, name := range names {
+		if strings.EqualFold(filepath.Ext(name), ".gif") {
+			if _, ok := validImageFile(filepath.Join(dir, fmt.Sprintf("%05d%s", i+1, filepath.Ext(name)))); !ok {
+				return false
+			}
+		}
+	}
+	return completeImageFiles(dir, len(names))
 }
