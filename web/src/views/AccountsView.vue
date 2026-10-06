@@ -5,6 +5,7 @@ import api from '@/api'
 import { useAppStore } from '@/store/app'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { useViewActive } from '@/composables/useViewActive'
+import { useSyncStatus } from '@/composables/useSyncStatus'
 import KindTag from '@/components/KindTag.vue'
 import StatusTag from '@/components/StatusTag.vue'
 import { KIND_OPTIONS, formatTime, fromNow } from '@/utils/format'
@@ -17,6 +18,22 @@ const dialogWidth = computed(() => (isMobile.value ? '94%' : '460px'))
 const loading = ref(false)
 const rows = ref([])
 const rowBusy = ref({}) // id -> 'login' | 'sync'
+
+const sync = useSyncStatus((run) => {
+  if (run.status === 'success') ElMessage.success(`同步完成：入队 ${run.enqueued} 个，跳过 ${run.skipped} 个`)
+  else ElMessage.error(`同步${run.status === 'partial' ? '部分完成' : '失败'}：${run.error}`)
+  load()
+  store.loadActiveJobs().catch(() => {})
+})
+const syncRuns = sync.runs
+const syncError = sync.error
+function syncText(id) {
+  const r = syncRuns.value[id]
+  if (!r) return ''
+  if (r.status === 'queued') return '等待同步'
+  if (r.status === 'running') return r.stage === 'favorites' ? '正在读取收藏…' : `已核对 ${r.processed}/${r.total} · 入队 ${r.enqueued} · 跳过 ${r.skipped}`
+  return `${r.status === 'success' ? '已完成' : r.status === 'partial' ? '部分完成' : '失败'} · 入队 ${r.enqueued} · 跳过 ${r.skipped}${r.error ? '：' + r.error : ''}`
+}
 
 /* ---------- 新增 / 编辑 ---------- */
 const dialogVisible = ref(false)
@@ -134,9 +151,9 @@ async function syncNow(row) {
   rowBusy.value = { ...rowBusy.value, [row.id]: 'sync' }
   try {
     const res = await api.syncAccount(row.id)
-    ElMessage.success(`同步完成：入队 ${res?.enqueued ?? 0} 个，跳过 ${res?.skipped ?? 0} 个`)
-    await load()
-    store.loadActiveJobs().catch(() => {})
+    syncRuns.value = { ...syncRuns.value, [row.id]: res }
+    ElMessage.info('同步已在后台启动，可离开页面，进度会自动更新')
+    sync.start()
   } catch (e) {
     /* api.js 已提示 */
   } finally {
@@ -170,7 +187,7 @@ function statusOf(row) {
 }
 
 /* keep-alive 缓存后 onMounted 只跑一次：切回账号页重新拉（外部改过账号也能看到） */
-const active = useViewActive({ onEnter: load })
+const active = useViewActive({ onEnter: () => { load(); sync.start() }, onLeave: sync.stop })
 
 /** 顶栏「刷新」 */
 watch(
@@ -204,6 +221,8 @@ watch(
     >
       <el-button size="small" text type="primary" @click="load">重试</el-button>
     </el-alert>
+
+    <el-alert v-if="syncError" :title="syncError" type="warning" :closable="false" class="mb10" />
 
     <!-- 宽屏：表格 -->
     <el-table
@@ -255,10 +274,11 @@ watch(
           <span :title="formatTime(row.lastSyncAt, true)">{{ fromNow(row.lastSyncAt) }}</span>
         </template>
       </el-table-column>
+      <el-table-column label="同步进度" min-width="220"><template #default="{ row }"><span>{{ syncText(row.id) || '—' }}</span></template></el-table-column>
       <el-table-column label="操作" width="230" fixed="right">
         <template #default="{ row }">
           <el-button size="small" :loading="rowBusy[row.id] === 'login'" @click="testLogin(row)">测试登录</el-button>
-          <el-button size="small" type="primary" plain :loading="rowBusy[row.id] === 'sync'" @click="syncNow(row)">
+          <el-button size="small" type="primary" plain :loading="rowBusy[row.id] === 'sync' || sync.isRunning(row.id)" @click="syncNow(row)">
             立即同步
           </el-button>
           <el-dropdown trigger="click" class="more-dd">
@@ -311,6 +331,7 @@ watch(
             <span class="k">最近同步</span>
             <span class="v">{{ fromNow(row.lastSyncAt) }}</span>
           </div>
+          <div v-if="syncRuns[row.id]" class="ms-mrow"><span class="k">同步进度</span><span class="v">{{ syncText(row.id) }}</span></div>
           <div v-if="row.error" class="ms-mrow">
             <span class="k">错误</span>
             <span class="v danger-text">{{ row.error }}</span>
@@ -327,7 +348,7 @@ watch(
             size="small"
             type="primary"
             plain
-            :loading="rowBusy[row.id] === 'sync'"
+            :loading="rowBusy[row.id] === 'sync' || sync.isRunning(row.id)"
             @click="syncNow(row)"
           >
             立即同步

@@ -77,6 +77,17 @@ func (e *Engine) verifyComic(ctx context.Context, src source.Source, cred *sourc
 	missing := []int{}
 	done := 0
 	for _, ch := range detail.Chapters {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		path := ""
+		if rec != nil {
+			path = chapterPath(rec.Path, ch.Order, len(detail.Chapters))
+		}
+		if path == "" || pageCount(path) == 0 {
+			missing = append(missing, ch.Order)
+			continue
+		}
 		expected, _, err := src.Pages(ctx, cred, id, ch.Order)
 		if err != nil {
 			return nil, err
@@ -84,10 +95,7 @@ func (e *Engine) verifyComic(ctx context.Context, src source.Source, cred *sourc
 		if expected < 1 {
 			return nil, fmt.Errorf("章节 %d 页数未知", ch.Order)
 		}
-		path := ""
-		if rec != nil {
-			path = chapterPath(rec.Path, ch.Order, len(detail.Chapters))
-		}
+
 		old, known := checks[ch.Order]
 		identityOK := !known || old.RemoteID == "" || old.RemoteID == ch.ID
 		if path != "" && identityOK && pageCount(path) == expected {

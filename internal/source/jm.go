@@ -406,7 +406,7 @@ func (j *JM) Search(ctx context.Context, cred *Cred, keyword string, page, pageS
 	for _, it := range res.Content {
 		items = append(items, it.toComic())
 	}
-	return &SearchResult{Total: res.Total.Int(), Page: page, PageSize: pageSize, Items: items}, nil
+	return &SearchResult{Total: res.Total.Int(), Page: page, PageSize: 80, Items: items}, nil
 }
 
 func jmSortParam(s string) string {

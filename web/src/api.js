@@ -166,7 +166,8 @@ export const api = {
   updateAccount: (id, patch) => request(`/accounts/${id}`, { method: 'PATCH', body: patch }),
   deleteAccount: (id) => request(`/accounts/${id}`, { method: 'DELETE' }),
   loginAccount: (id) => request(`/accounts/${id}/login`, { method: 'POST' }),
-  syncAccount: (id) => request(`/accounts/${id}/sync`, { method: 'POST', timeout: 125000 }),
+  syncAccount: (id) => request(`/accounts/${id}/sync`, { method: 'POST' }),
+  syncStatus: () => request('/sync-status', { silent: true }),
 
   // 收藏
   favorites: (accountId, { keyword, page = 1, pageSize = 20, signal, keepalive = false, timeout = 30000 } = {}) =>

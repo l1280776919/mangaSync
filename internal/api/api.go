@@ -41,6 +41,7 @@ func (s *Server) Routes() http.Handler {
 	m.HandleFunc("GET /api/reading/{kind}/{comicId}", s.getReading)
 	m.HandleFunc("PUT /api/reading/{kind}/{comicId}", s.putReading)
 	m.HandleFunc("GET /api/sync-history", s.syncHistory)
+	m.HandleFunc("GET /api/sync-status", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, s.eng.SyncStatus()) })
 	m.HandleFunc("GET /api/trash", s.trashList)
 	m.HandleFunc("POST /api/trash/{id}/restore", s.restoreTrash)
 	m.HandleFunc("POST /api/auth/login", s.authLogin)
@@ -324,30 +325,30 @@ func (s *Server) syncAccount(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "%v", err)
 		return
 	}
-	ctx, cancel := ctxTimeout(r, 120*time.Second)
-	defer cancel()
-	enq, skip, err := s.eng.SyncAccount(ctx, acc.ID)
+	run, err := s.eng.StartAccountSync(acc.ID)
 	if err != nil {
-		// 部分同步：已经入队了一部分（源中途翻页失败），把数字一起告诉前端
-		if enq > 0 || skip > 0 {
-			writeErr(w, 400, "部分同步：已入队 %d、跳过 %d，但 %v", enq, skip, err)
-			return
-		}
-		writeErr(w, 400, "同步失败: %v", err)
+		writeErr(w, 400, "启动同步失败: %v", err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"enqueued": enq, "skipped": skip})
+	writeJSON(w, http.StatusAccepted, run)
 }
 
 func (s *Server) syncAll(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := ctxTimeout(r, 300*time.Second)
-	defer cancel()
-	enq, skip, err := s.eng.SyncAll(ctx)
+	accounts, err := s.st.ListAccounts()
 	if err != nil {
-		writeErr(w, 400, "%v", err)
+		writeErr(w, 500, "%v", err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"enqueued": enq, "skipped": skip})
+	runs := []engine.SyncProgress{}
+	for _, a := range accounts {
+		run, err := s.eng.StartAccountSync(a.ID)
+		if err != nil {
+			writeErr(w, 500, "部分任务可能已启动: %v", err)
+			return
+		}
+		runs = append(runs, run)
+	}
+	writeJSON(w, http.StatusAccepted, runs)
 }
 
 // decorate 给漫画补上本地下载状态

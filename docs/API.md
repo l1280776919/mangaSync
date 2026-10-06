@@ -54,8 +54,10 @@
 - `PATCH /api/accounts/{id}` body `{label?, username?, password?, note?}`（改了 username/password 会自动重登）
 - `DELETE /api/accounts/{id}`
 - `POST /api/accounts/{id}/login` → 返回账号对象（刷新 status/nickname）
-- `POST /api/accounts/{id}/sync` → 把该账号收藏全部入队，返回 `{"enqueued": 12, "skipped": 31}`
-  （已下载完整且无新章节的跳过）
+- `POST /api/accounts/{id}/sync` → HTTP **202**，返回后台任务快照 `{id, accountId, status, stage, processed, total, enqueued, skipped, error}`。重复提交同一账号会复用正在执行的任务，不能把 202 当作同步已完成。
+- `GET /api/sync-status` → 各账号本进程中最近一次同步快照数组。`status` 为 `queued/running/success/partial/failed`；`stage` 为 `queued/favorites/checking/finished`。持久化结果仍从 `/api/sync-history` 读取。
+- `POST /api/downloads/sync-all` → HTTP **202**，返回各账号后台任务快照数组。
+- 手动同步与 HTTP 连接生命周期解耦，后台每轮最多 30 分钟，同时最多两个账号执行；离开页面不会取消。服务退出会取消并保存结果，重启不自动续跑被中断的同步，已入队下载保留。
 
 ## 收藏
 
@@ -173,3 +175,7 @@
 `GET /api/comics/{kind}/{comicId}?local=1` 在存在本地库目录时优先返回本地章节索引；用于离线阅读入口。
 
 设置新增 `cacheMaxMB`（默认 2048）、`minFreeMB`（默认 512），范围均为 64–1048576 MB。统计新增 `downloadPause` 提示；健康检查新增 `commit`。
+
+### 搜索分页说明
+
+`/api/search` 使用上游页码，`pageSize` 以响应为准：禁漫固定 80 条/页，哔咔采用响应中的 `limit`。前端不再提供上游不支持的每页条数切换。末页不足一页时不会按实际返回条数重新计算总页数。

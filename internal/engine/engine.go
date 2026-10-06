@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,13 +33,16 @@ type Engine struct {
 	srcs    map[string]source.Source
 	srcKeys map[string]string
 
-	scanMu sync.Mutex
-	opMu   sync.Mutex
-	syncMu sync.Mutex
+	scanMu    sync.Mutex
+	opMu      sync.Mutex
+	syncMu    sync.Mutex
+	syncJobs  map[int64]*syncJob
+	syncSlots chan struct{}
+	lifeCtx   context.Context
 }
 
 func New(st *store.Store, cfg *config.Manager) *Engine {
-	return &Engine{st: st, cfg: cfg,
+	return &Engine{st: st, cfg: cfg, syncJobs: map[int64]*syncJob{}, syncSlots: make(chan struct{}, 2), lifeCtx: context.Background(),
 		running: map[int64]context.CancelFunc{}, subs: map[chan []byte]struct{}{},
 		srcs: map[string]source.Source{}, srcKeys: map[string]string{}}
 }
@@ -200,6 +204,9 @@ func (e *Engine) Retry(id int64) error {
 
 // Start 启动调度循环
 func (e *Engine) Start(ctx context.Context) {
+	e.syncMu.Lock()
+	e.lifeCtx = ctx
+	e.syncMu.Unlock()
 	go func() {
 		t := time.NewTicker(800 * time.Millisecond)
 		defer t.Stop()
@@ -447,21 +454,10 @@ func (e *Engine) Broadcast(name string, payload any) { e.broadcastEvent(name, pa
 // ---------------- 收藏同步入队 ----------------
 
 // SyncAccount 把某账号的收藏里「没下完/有更新」的入队，返回 (入队数, 跳过数)
-func (e *Engine) SyncAccount(ctx context.Context, accID int64) (enq, skip int, resultErr error) {
-	e.syncMu.Lock()
-	defer e.syncMu.Unlock()
+func (e *Engine) syncAccount(ctx context.Context, accID int64) (enq, skip int, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return 0, 0, err
 	}
-	runID, err := e.st.StartSync(accID)
-	if err != nil {
-		return 0, 0, err
-	}
-	defer func() {
-		if err := e.st.FinishSync(runID, enq, skip, resultErr); err != nil {
-			resultErr = errors.Join(resultErr, err)
-		}
-	}()
 
 	acc, err := e.st.GetAccount(accID)
 	if err != nil {
@@ -473,17 +469,12 @@ func (e *Engine) SyncAccount(ctx context.Context, accID int64) (enq, skip int, r
 	}
 	cred, err := e.EnsureCred(ctx, acc)
 	if err != nil {
-		if acc.Username != "" && acc.Password != "" {
-			cred, err = e.Relogin(ctx, acc)
-		}
-		if err != nil {
-			return 0, 0, err
-		}
+		return 0, 0, err
 	}
 	favs, err := src.Favorites(ctx, cred)
 	var partialErr error
 	if err != nil {
-		if err == source.ErrAuth && acc.Username != "" && acc.Password != "" {
+		if errors.Is(err, source.ErrAuth) && acc.Username != "" && acc.Password != "" {
 			if cred2, e2 := e.Relogin(ctx, acc); e2 == nil {
 				if f2, e3 := src.Favorites(ctx, cred2); len(f2) > 0 || e3 == nil {
 					favs, err = f2, e3
@@ -498,29 +489,19 @@ func (e *Engine) SyncAccount(ctx context.Context, accID int64) (enq, skip int, r
 		// 让调用方提示「部分同步」，而不是像以前那样要么整单失败、要么静默当成功
 		partialErr = err
 	}
-	for _, c := range favs {
+	e.updateSync(accID, "checking", 0, len(favs), enq, skip)
+	processed := 0
+	for i, c := range favs {
+		e.updateSync(accID, "checking", i, len(favs), enq, skip)
 		if err := ctx.Err(); err != nil {
 			partialErr = errors.Join(partialErr, err)
 			break
 		}
+		processed = i + 1
 		if blocked, err := e.st.InTrash(acc.Kind, c.ComicID); err != nil {
 			partialErr = errors.Join(partialErr, err)
 			continue
 		} else if blocked {
-			skip++
-			continue
-		}
-		missing, err := e.verifyComic(ctx, src, cred, c.ComicID)
-		if errors.Is(err, source.ErrAuth) {
-			if cred, err = e.Relogin(ctx, acc); err == nil {
-				missing, err = e.verifyComic(ctx, src, cred, c.ComicID)
-			}
-		}
-		if err != nil {
-			partialErr = errors.Join(partialErr, fmt.Errorf("%s: %w", c.Title, err))
-			continue
-		}
-		if len(missing) == 0 {
 			skip++
 			continue
 		}
@@ -533,6 +514,30 @@ func (e *Engine) SyncAccount(ctx context.Context, accID int64) (enq, skip int, r
 			skip++
 			continue
 		}
+		rec, err := e.st.GetComic(acc.Kind, c.ComicID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			partialErr = errors.Join(partialErr, err)
+			continue
+		}
+		// A wholly missing book needs no remote chapter/image inventory before download.
+		var missing []int
+		if rec != nil && rec.Images > 0 {
+			missing, err = e.verifyComic(ctx, src, cred, c.ComicID)
+			if errors.Is(err, source.ErrAuth) {
+				if cred, err = e.Relogin(ctx, acc); err == nil {
+					missing, err = e.verifyComic(ctx, src, cred, c.ComicID)
+				}
+			}
+			if err != nil {
+				partialErr = errors.Join(partialErr, fmt.Errorf("%s: %w", c.Title, err))
+				continue
+			}
+			if len(missing) == 0 {
+				skip++
+				continue
+			}
+		}
+
 		if _, err = e.Enqueue(&store.Job{Kind: acc.Kind, AccountID: acc.ID, ComicID: c.ComicID, Title: c.Title, Chapters: missing}); err != nil {
 			partialErr = errors.Join(partialErr, err)
 			continue
@@ -540,7 +545,13 @@ func (e *Engine) SyncAccount(ctx context.Context, accID int64) (enq, skip int, r
 		enq++
 	}
 
-	_ = e.st.TouchSync(acc.ID)
+	e.updateSync(accID, "checking", processed, len(favs), enq, skip)
+	if ctx.Err() != nil {
+		partialErr = errors.Join(partialErr, ctx.Err())
+	}
+	if partialErr == nil {
+		partialErr = e.st.TouchSync(acc.ID)
+	}
 	return enq, skip, partialErr
 }
 

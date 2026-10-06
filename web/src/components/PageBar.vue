@@ -5,18 +5,19 @@ import { useIsMobile } from '@/composables/useIsMobile'
 /**
  * 统一分页条（契约分页参数 page / pageSize，page 从 1 开始）
  */
-defineProps({
+const props = defineProps({
   total: { type: Number, default: 0 },
   page: { type: Number, default: 1 },
   pageSize: { type: Number, default: 20 },
   pageSizes: { type: Array, default: () => [20, 50, 100, 200] },
-  disabled: { type: Boolean, default: false }
+  disabled: { type: Boolean, default: false },
+  showSizes: { type: Boolean, default: true }
 })
 
 /* 手机端：去掉总数/每页条数/跳页，避免分页条换行溢出 */
 const isMobile = useIsMobile()
 const layout = computed(() =>
-  isMobile.value ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper'
+  isMobile.value ? 'prev, pager, next' : props.showSizes ? 'total, sizes, prev, pager, next, jumper' : 'total, prev, pager, next, jumper'
 )
 const pagerCount = computed(() => (isMobile.value ? 5 : 7))
 

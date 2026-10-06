@@ -119,3 +119,27 @@ func TestPicaLoginDoesNotMaskCanceledProfile(t *testing.T) {
 		t.Fatalf("info=%v err=%v", info, err)
 	}
 }
+
+func TestPicaFavoritesPreserveEarlierPages(t *testing.T) {
+	p := NewPica("", "", 1)
+	p.api.Transport = picaAuthTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Query().Get("page") == "1" {
+			return picaAuthResponse(200, `{"code":200,"data":{"comics":{"pages":2,"docs":[{"_id":"first","title":"test"}]}}}`), nil
+		}
+		return picaAuthResponse(400, `{"code":400,"message":"unavailable"}`), nil
+	})
+	favs, err := p.Favorites(context.Background(), &Cred{Token: "test"})
+	if err == nil || len(favs) != 1 || favs[0].ComicID != "first" {
+		t.Fatalf("favorites=%v err=%v", favs, err)
+	}
+}
+func TestPicaSearchPreservesUpstreamPageSizeOnLastPage(t *testing.T) {
+	p := NewPica("", "", 1)
+	p.api.Transport = picaAuthTransport(func(r *http.Request) (*http.Response, error) {
+		return picaAuthResponse(200, `{"code":200,"data":{"comics":{"total":41,"limit":40,"docs":[{"_id":"last"}]}}}`), nil
+	})
+	result, err := p.Search(context.Background(), &Cred{Token: "test"}, "test", 2, 20, "")
+	if err != nil || result.PageSize != 40 || len(result.Items) != 1 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}

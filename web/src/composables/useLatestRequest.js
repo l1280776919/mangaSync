@@ -71,7 +71,13 @@ export function useLatestRequest(timeout = 20000) {
     clearTimer()
   }
 
-  return { begin, isCurrent, end }
+  function cancel() {
+    seq++
+    ctl?.abort()
+    clearTimer()
+  }
+
+  return { begin, isCurrent, end, cancel }
 }
 
 export default useLatestRequest

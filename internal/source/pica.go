@@ -135,7 +135,11 @@ func (p *Pica) apiCall(ctx context.Context, method, path, token string, body any
 		resp, err := p.api.Do(req)
 		if err != nil {
 			lastErr = err
-			time.Sleep(time.Duration(attempt+1) * 1500 * time.Millisecond)
+			if attempt < 2 {
+				if err := picaRetryWait(ctx, time.Duration(attempt+1)*1500*time.Millisecond); err != nil {
+					return nil, err
+				}
+			}
 			continue
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, (8<<20)+1))
@@ -151,7 +155,11 @@ func (p *Pica) apiCall(ctx context.Context, method, path, token string, body any
 		}
 		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-			time.Sleep(time.Duration(attempt+1) * 1500 * time.Millisecond)
+			if attempt < 2 {
+				if err := picaRetryWait(ctx, time.Duration(attempt+1)*1500*time.Millisecond); err != nil {
+					return nil, err
+				}
+			}
 			continue
 		}
 		if resp.StatusCode != 200 {
@@ -179,7 +187,7 @@ func (p *Pica) apiCall(ctx context.Context, method, path, token string, body any
 		}
 		return env.Data, nil
 	}
-	return nil, fmt.Errorf("请求失败: %v", lastErr)
+	return nil, fmt.Errorf("请求失败: %w", lastErr)
 }
 
 func truncate(s string, n int) string {
@@ -266,9 +274,12 @@ func (p *Pica) favouritesPage(ctx context.Context, cred *Cred, page int) (*picaP
 func (p *Pica) Favorites(ctx context.Context, cred *Cred) ([]*Comic, error) {
 	var out []*Comic
 	for page := 1; page <= 200; page++ {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
 		pg, err := p.favouritesPage(ctx, cred, page)
 		if err != nil {
-			return nil, err
+			return out, err
 		}
 		var docs []struct {
 			ID         string    `json:"_id"`
@@ -281,7 +292,7 @@ func (p *Pica) Favorites(ctx context.Context, cred *Cred) ([]*Comic, error) {
 			Thumb      ImageResp `json:"thumb"`
 		}
 		if err := json.Unmarshal(pg.Docs, &docs); err != nil {
-			return nil, err
+			return out, err
 		}
 		for _, d := range docs {
 			out = append(out, &Comic{
@@ -296,11 +307,13 @@ func (p *Pica) Favorites(ctx context.Context, cred *Cred) ([]*Comic, error) {
 			})
 		}
 		if pg.Pages <= page || len(docs) == 0 {
-			break
+			return out, nil
 		}
-		time.Sleep(120 * time.Millisecond)
+		if err := picaRetryWait(ctx, 120*time.Millisecond); err != nil {
+			return out, err
+		}
 	}
-	return out, nil
+	return out, fmt.Errorf("收藏超过 200 页，本轮仅同步已获取的部分")
 }
 
 func (p *Pica) Search(ctx context.Context, cred *Cred, keyword string, page, pageSize int, sort string) (*SearchResult, error) {
@@ -338,7 +351,17 @@ func (p *Pica) Search(ctx context.Context, cred *Cred, keyword string, page, pag
 	if err := json.Unmarshal(d.Comics.Docs, &docs); err != nil {
 		return nil, err
 	}
-	res := &SearchResult{Total: d.Comics.Total, Page: page, PageSize: len(docs)}
+	size := d.Comics.Limit
+	if size <= 0 {
+		size = pageSize
+		if page == 1 && len(docs) > 0 {
+			size = len(docs)
+		}
+	}
+	if size <= 0 {
+		size = 20
+	}
+	res := &SearchResult{Total: d.Comics.Total, Page: page, PageSize: size}
 	for _, x := range docs {
 		res.Items = append(res.Items, &Comic{
 			Kind: "pica", ComicID: x.ID, Title: x.Title, Author: x.Author,
@@ -1126,5 +1149,16 @@ func sortChapters(cs []Chapter) {
 				cs[i], cs[j] = cs[j], cs[i]
 			}
 		}
+	}
+}
+
+func picaRetryWait(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }

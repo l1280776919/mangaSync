@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '@/api'
 import { useAppStore } from '@/store/app'
@@ -25,6 +25,7 @@ const loading = ref(false)
 const collectedIds = ref([])
 const collectingId = ref(null)
 const searched = ref(false)
+const searchError = ref('')
 
 const {
   pickerVisible,
@@ -49,6 +50,7 @@ async function load() {
   page.value = page.value || 1
   const { my, signal } = req.begin()
   loading.value = true
+  searchError.value = ''
   try {
     const res = await api.search({
       kind: kind.value,
@@ -62,8 +64,10 @@ async function load() {
     if (!req.isCurrent(my)) return
     items.value = res?.items || []
     total.value = Number(res?.total) || 0
+    if (Number(res?.pageSize) > 0) pageSize.value = Number(res.pageSize)
   } catch (e) {
-    if (e?.name === 'AbortError' || !req.isCurrent(my)) return
+    if (!req.isCurrent(my)) return
+    searchError.value = e?.name === 'AbortError' ? '搜索超时，请重试' : (e?.message || '搜索失败，请重试')
     items.value = []
     total.value = 0
   } finally {
@@ -107,7 +111,20 @@ async function onDownload(item) {
   store.loadActiveJobs().catch(() => {})
 }
 
+function clearSearch() {
+  req.cancel()
+  loading.value = false
+  items.value = []
+  total.value = 0
+  page.value = 1
+  searched.value = false
+  searchError.value = ''
+  collectedIds.value = []
+}
+watch(keyword, value => { if (!value.trim()) clearSearch() })
+onUnmounted(() => req.cancel())
 watch(kind, () => {
+  clearSearch()
   accountId.value = null
   sort.value = ''
   items.value = []
@@ -116,7 +133,7 @@ watch(kind, () => {
 })
 
 /* keep-alive 缓存后 onMounted 只跑一次：切回搜索页补一次账号列表（store 内有缓存/去重） */
-const active = useViewActive({ onEnter: () => store.loadAccounts().catch(() => {}) })
+const active = useViewActive({ onEnter: () => store.loadAccounts().catch(() => {}), onLeave: () => { req.cancel(); loading.value = false } })
 
 /** 顶栏「刷新」：已搜过就按当前条件重搜 */
 watch(
@@ -165,7 +182,7 @@ const quickKeywords = ['同人', '短篇', '中文', '单行本']
         class="grow"
         clearable
         @keyup.enter="submit"
-        @clear="() => (searched = false)"
+        @clear="clearSearch"
       >
         <template #prefix><el-icon><Search /></el-icon></template>
       </el-input>
@@ -195,8 +212,10 @@ const quickKeywords = ['同人', '短篇', '中文', '单行本']
       </span>
     </div>
 
+    <el-alert v-if="searchError && !loading" :title="searchError" type="error" :closable="false" show-icon><el-button @click="submit">重试</el-button></el-alert>
+
     <el-empty
-      v-if="!searched && !loading"
+      v-else-if="!searched && !loading"
       description="输入关键词开始搜索"
     />
 
@@ -230,7 +249,7 @@ const quickKeywords = ['同人', '短篇', '中文', '单行本']
       </ComicCard>
     </div>
 
-    <PageBar v-model:page="page" v-model:page-size="pageSize" :total="total" :disabled="loading" @change="load" />
+    <PageBar :show-sizes="false" v-model:page="page" v-model:page-size="pageSize" :total="total" :disabled="loading" @change="load" />
 
     <div class="foot-tip ms-dim">
       提示：下载任务入队后可在「任务」页查看进度；结果为已下载状态时显示「已下载」标签。

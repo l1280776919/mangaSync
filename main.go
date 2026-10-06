@@ -255,6 +255,7 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(shutdownCtx)
+	eng.WaitSync(shutdownCtx)
 }
 
 // staticAssets 启动时把前端文本资源预压缩进内存：响应可带 Content-Length（定长），
