@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -105,7 +106,10 @@ func (p *Pica) apiCall(ctx context.Context, method, path, token string, body any
 		ts := strconv.FormatInt(time.Now().Unix(), 10)
 		var rdr io.Reader
 		if body != nil {
-			b, _ := json.Marshal(body)
+			b, err := json.Marshal(body)
+			if err != nil {
+				return nil, fmt.Errorf("哔咔请求 %s 编码失败: %w", path, err)
+			}
 			rdr = bytes.NewReader(b)
 		}
 		req, err := http.NewRequestWithContext(ctx, method, picaHost+path, rdr)
@@ -134,10 +138,16 @@ func (p *Pica) apiCall(ctx context.Context, method, path, token string, body any
 			time.Sleep(time.Duration(attempt+1) * 1500 * time.Millisecond)
 			continue
 		}
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, (8<<20)+1))
 		resp.Body.Close()
 		if resp.StatusCode == 401 {
 			return nil, ErrAuth
+		}
+		if readErr != nil {
+			return nil, fmt.Errorf("读取哔咔响应 %s 失败: %w", path, readErr)
+		}
+		if len(raw) > 8<<20 {
+			return nil, fmt.Errorf("哔咔响应 %s 超过 8 MiB 限制", path)
 		}
 		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
@@ -155,13 +165,17 @@ func (p *Pica) apiCall(ctx context.Context, method, path, token string, body any
 			Data    json.RawMessage `json:"data"`
 		}
 		if err := json.Unmarshal(raw, &env); err != nil {
-			return nil, fmt.Errorf("响应不是 JSON: %s", truncate(string(raw), 150))
+			// 不把原始响应写入账号错误，响应可能包含令牌或账号信息。
+			return nil, fmt.Errorf("哔咔响应 %s 不是有效 JSON（HTTP %d）", path, resp.StatusCode)
 		}
 		if env.Code == 401 || env.Error == "1005" {
 			return nil, ErrAuth
 		}
 		if env.Code != 200 {
 			return nil, fmt.Errorf("code=%d %s %s", env.Code, env.Message, env.Detail)
+		}
+		if len(bytes.TrimSpace(env.Data)) == 0 || bytes.Equal(bytes.TrimSpace(env.Data), []byte("null")) {
+			return nil, fmt.Errorf("哔咔响应 %s 声称成功但缺少 data（HTTP 200，code=200），请检查接口或代理", path)
 		}
 		return env.Data, nil
 	}
@@ -186,10 +200,17 @@ func (p *Pica) Login(ctx context.Context, username, password string) (*AccountIn
 		Token string `json:"token"`
 	}
 	if err := json.Unmarshal(data, &d); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("哔咔登录响应格式异常：无法读取 data.token")
+	}
+	if strings.TrimSpace(d.Token) == "" {
+		return nil, fmt.Errorf("哔咔登录响应缺少有效的 data.token，请检查接口或代理")
 	}
 	info, err := p.Profile(ctx, &Cred{Token: d.Token})
 	if err != nil {
+		if errors.Is(err, ErrAuth) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		// 已取得非空令牌时，非鉴权类资料错误不阻止登录。
 		return &AccountInfo{Token: d.Token}, nil
 	}
 	info.Token = d.Token
