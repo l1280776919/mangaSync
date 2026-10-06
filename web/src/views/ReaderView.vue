@@ -1,7 +1,7 @@
 <template>
-  <div class="rd" :class="{ 'rd-dark': dark }">
+  <div class="rd" :class="{ 'rd-dark': dark }" :style="{ '--reading-width': readingWidth + 'px' }">
     <!-- 顶栏：浮层（隐藏时不再挤占滚动区域，避免翻页位置跳动） -->
-    <div class="rd-bar" :class="{ 'is-hidden': !barVisible }">
+    <div class="rd-bar" :class="{ 'is-hidden': !barVisible }" :inert="!barVisible ? '' : undefined">
       <div class="rd-left">
         <el-button text class="rd-back" @click="back">
           <el-icon><ArrowLeft /></el-icon><span class="rd-back-txt">返回</span>
@@ -20,15 +20,15 @@
           <span class="rd-origin-tag" title="当前以无损原画画质呈现">原画</span>
         </div>
 
-        <el-select :model-value="order" class="rd-chap" size="small" :teleported="true" @change="switchChapter">
+        <el-select aria-label="选择章节" :model-value="order" class="rd-chap" size="small" :teleported="true" @change="switchChapter">
           <el-option v-for="ch in chapters" :key="ch.order" :label="chapLabel(ch)" :value="ch.order" />
         </el-select>
 
         <div class="rd-grp">
-          <el-button size="small" :disabled="order <= 1" @click="switchChapter(order - 1)">
+          <el-button aria-label="上一章" size="small" :disabled="!previousChapter || loading" @click="switchChapter(previousChapter?.order)">
             <el-icon><DArrowLeft /></el-icon>
           </el-button>
-          <el-button size="small" :disabled="order >= chapters.length" @click="switchChapter(order + 1)">
+          <el-button aria-label="下一章" size="small" :disabled="!nextChapter || loading" @click="switchChapter(nextChapter?.order)">
             <el-icon><DArrowRight /></el-icon>
           </el-button>
         </div>
@@ -47,30 +47,24 @@
           <el-icon><FullScreen /></el-icon>
         </el-button>
 
-        <el-dropdown v-if="compact" trigger="click" placement="bottom-end" @command="onCommand">
-          <el-button size="small" class="rd-more" title="阅读设置">
-            <el-icon><Setting /></el-icon>
-          </el-button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="width">适宽</el-dropdown-item>
-              <el-dropdown-item command="height">适高</el-dropdown-item>
-              <el-dropdown-item command="original">原始尺寸</el-dropdown-item>
-              <el-dropdown-item command="theme" divided>{{ dark ? '切到浅色' : '切到深色' }}</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+        <el-button size="small" class="rd-more" aria-label="阅读设置" @click="settingsOpen = true">
+          <el-icon><Setting /></el-icon><span v-if="!compact">设置</span>
+        </el-button>
       </div>
     </div>
 
     <!-- 图片区 -->
     <div
       ref="scroller"
+      tabindex="0"
+      role="region"
+      aria-label="漫画阅读区"
       class="rd-scroll"
       :class="['rd-fit-' + fit, { 'is-bar': barVisible, 'rd-snap': fit === 'height' }]"
       @scroll.passive="onScroll"
       @touchstart.passive="onTouchStart"
       @touchend="onTouchEnd"
+      @touchcancel="touchStart = null"
       @click="onTap"
     >
       <div class="rd-pages">
@@ -80,7 +74,8 @@
             :src="pageUrl(p)"
             :alt="'第 ' + p + ' 页'"
             decoding="async"
-            :loading="p <= 3 ? 'eager' : 'lazy'"
+            :loading="Math.abs(p - page) <= 1 ? 'eager' : 'lazy'"
+            :fetchpriority="p === page ? 'high' : 'auto'"
             :class="{ 'is-loaded': loaded[p] }"
             @load="onLoaded(p, $event)"
             @error="onError(p, $event)"
@@ -94,8 +89,8 @@
         </div>
       </div>
 
-      <div v-if="loading" class="rd-tip">正在加载…</div>
-      <div v-else-if="loadError" class="rd-tip rd-tip-err">
+      <div v-if="loading" class="rd-tip" role="status">正在加载…</div>
+      <div v-else-if="loadError" class="rd-tip rd-tip-err" role="alert">
         {{ loadError }}
         <el-button text size="small" @click.stop="load">重试</el-button>
         <el-button text size="small" @click.stop="router.push('/accounts')">检查源账号</el-button>
@@ -103,19 +98,46 @@
       </div>
 
       <div v-if="meta.pages" class="rd-end">
-        <el-button :disabled="order <= 1" @click.stop="switchChapter(order - 1)">上一章</el-button>
+        <el-button :disabled="!previousChapter || loading" @click.stop="switchChapter(previousChapter?.order)">上一章</el-button>
         <span class="rd-end-tip">{{ meta.chapterTitle || '' }} 完</span>
-        <el-button type="primary" :disabled="order >= chapters.length" @click.stop="switchChapter(order + 1)">
+        <el-button type="primary" :disabled="!nextChapter || loading" @click.stop="switchChapter(nextChapter?.order)">
           下一章
         </el-button>
       </div>
     </div>
+    <nav class="rd-bottom" :class="{ 'is-hidden': !barVisible }" :inert="!barVisible ? '' : undefined" aria-label="阅读导航">
+      <button class="rd-control" aria-label="上一页" :disabled="loading || page <= 1" @click="flip(-1)">‹</button>
+      <input class="rd-seek" type="range" aria-label="跳转页码" :min="1" :max="Math.max(1, meta.pages)" :value="page" :disabled="loading || !meta.pages" @change="jumpPage($event.target.value)" />
+      <label class="rd-jump"><input aria-label="当前页码" type="number" inputmode="numeric" :min="1" :max="meta.pages" :value="page" :disabled="loading || !meta.pages" @change="jumpPage($event.target.value)" @keydown.enter="$event.target.blur()" /> / {{ meta.pages || '—' }}</label>
+      <button class="rd-control" aria-label="下一页" :disabled="loading || page >= meta.pages" @click="flip(1)">›</button>
+    </nav>
+    <button v-if="!barVisible" class="rd-peek" aria-label="显示阅读工具栏" @click="toggleBar">{{ page }} / {{ meta.pages || '—' }} · 菜单</button>
+    <el-drawer v-model="settingsOpen" title="阅读设置" :direction="compact ? 'btt' : 'rtl'" :size="compact ? 'auto' : '360px'" class="rd-settings">
+      <div class="rd-setting-group"><p>章节</p><el-select aria-label="选择阅读章节" :model-value="order" @change="value => { switchChapter(value); settingsOpen = false }"><el-option v-for="ch in chapters" :key="ch.order" :label="chapLabel(ch)" :value="ch.order" /></el-select></div>
+      <div class="rd-setting-group">
+        <p>显示方式</p>
+        <el-radio-group v-model="fit" @change="applyFit">
+          <el-radio-button label="width">连续适宽</el-radio-button>
+          <el-radio-button label="height">一屏一页</el-radio-button>
+          <el-radio-button label="original">原始尺寸</el-radio-button>
+        </el-radio-group>
+      </div>
+      <label v-if="!compact" class="rd-setting-group">阅读宽度 · {{ readingWidth }} px
+        <input aria-label="阅读宽度" type="range" min="640" max="1400" step="40" v-model.number="readingWidth" @change="saveWidth" />
+      </label>
+      <div class="rd-setting-group"><el-switch :model-value="dark" active-text="深色阅读背景" @change="toggleDark" /></div>
+      <div class="rd-setting-group"><el-switch v-model="tapToTurn" active-text="轻点画面两侧翻页" @change="saveTapSetting" /></div>
+      <p class="rd-help">{{ compact ? '上下滑动阅读，中间轻点显示菜单。支持双指缩放。' : '← / → 翻页；空格 / Shift + 空格滚动；N / P 切章；F 切换适宽与适高；Esc 显示菜单。' }}</p>
+      <p class="rd-help">{{ meta.local ? '当前章节使用本地图片' : '当前章节在线加载' }} · 阅读进度自动保存</p>
+      <el-button v-if="Object.keys(failed).length" @click="retryFailed">重试加载失败的图片</el-button>
+    </el-drawer>
   </div>
 </template>
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import api from '@/api'
 import { useIsMobile } from '@/composables/useIsMobile'
 
@@ -156,22 +178,31 @@ const preloading = reactive({})
  */
 let gen = 0
 
-const fit = ref(localStorage.getItem('ms-reader-fit') || 'width')
-const dark = ref(localStorage.getItem('ms-reader-dark') === '1')
+function setting(key, fallback) { try { return localStorage.getItem(key) ?? fallback } catch (_) { return fallback } }
+function persist(key, value) { try { localStorage.setItem(key, String(value)) } catch (_) { /* Reading works without storage. */ } }
+const storedFit = setting('ms-reader-fit', 'width')
+const fit = ref(['width', 'height', 'original'].includes(storedFit) ? storedFit : 'width')
+const settingsOpen = ref(false)
+const readingWidth = ref(Math.max(640, Math.min(1400, Number(setting('ms-reader-width', '960')) || 960)))
+const tapToTurn = ref(setting('ms-reader-tap', '1') === '1')
+const chapterIndex = computed(() => chapters.value.findIndex(ch => ch.order === order.value))
+const previousChapter = computed(() => chapters.value[chapterIndex.value - 1])
+const nextChapter = computed(() => chapterIndex.value < 0 ? null : chapters.value[chapterIndex.value + 1])
+function saveWidth() { persist('ms-reader-width', readingWidth.value); applyFit() }
+function saveTapSetting() { persist('ms-reader-tap', tapToTurn.value ? '1' : '0') }
+function retryFailed() { Object.keys(failed).forEach(p => retry(Number(p))); settingsOpen.value = false }
+const dark = ref(setting('ms-reader-dark', '0') === '1')
 const isFullscreen = ref(!!document.fullscreenElement)
 const retriedTimes = reactive({})
 
-function toggleFullscreen() {
-  if (!document.fullscreenElement) {
-    document.documentElement.requestFullscreen?.().catch(() => {})
-  } else {
-    document.exitFullscreen?.().catch(() => {})
-  }
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen?.()
+    else if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen()
+    else ElMessage.info('当前浏览器不支持全屏，可以隐藏工具栏继续阅读')
+  } catch (_) { ElMessage.info('全屏未能开启，请使用浏览器的全屏功能') }
 }
-
-document.addEventListener('fullscreenchange', () => {
-  isFullscreen.value = !!document.fullscreenElement
-})
+function onFullscreenChange() { isFullscreen.value = !!document.fullscreenElement }
 const barVisible = ref(true)
 const page = ref(1)
 const scroller = ref(null)
@@ -185,8 +216,8 @@ const compact = isMobile
  * 彻底解决高分辨率 GIF 动图或超长画册几十张大图同时常驻 DOM 导致浏览器标签页显存/内存撑爆崩溃（Aw, Snap!）。
  * 仅在视口附近挂载 <img>，视口外的通过精确 CSS 占位骨架撑起完整高度，滚动条平滑不跳动。
  */
-const WINDOW_BEHIND = 6
-const WINDOW_AHEAD = 10
+const WINDOW_BEHIND = 2
+const WINDOW_AHEAD = 4
 
 function shouldRender(p) {
   const cur = page.value || 1
@@ -241,6 +272,8 @@ function readProgress() {
 
 async function load() {
   const my = ++gen
+  clearTimeout(saveTimer)
+  if (rafId) { cancelAnimationFrame(rafId); rafId = null }
   ready = false
   loadController?.abort()
   loadController = new AbortController()
@@ -250,6 +283,8 @@ async function load() {
   retryTimers.clear()
   Object.keys(retriedTimes).forEach(k => delete retriedTimes[k])
   meta.pages = 0
+  meta.chapterTitle = ''
+  meta.local = false
   page.value = 1
   loading.value = true
   loadError.value = ''
@@ -266,12 +301,12 @@ async function load() {
         const c = await api.comic(kind.value, comicId.value, signal, true)
         if (my !== gen) return // 已经切章，丢弃这次结果
         title.value = c.title || c.comicId
-        chapters.value = (c.chapters || []).map((x) => ({ order: x.order, title: x.title }))
-        if (!chapters.value.length) chapters.value = [{ order: 1, title: '' }]
+        chapters.value = (Array.isArray(c.chapters) ? c.chapters : []).map(x => ({ order: Number(x.order), title: x.title })).filter(x => Number.isInteger(x.order) && x.order > 0).sort((a, b) => a.order - b.order)
+        if (!chapters.value.length) chapters.value = [{ order: order.value, title: '' }]
       } catch (e) {
         if (my !== gen) return
         title.value = comicId.value
-        chapters.value = [{ order: 1, title: '' }]
+        chapters.value = [{ order: order.value, title: '' }]
       }
     }
     const m = await api.readerMeta(kind.value, comicId.value, order.value, signal)
@@ -285,8 +320,9 @@ async function load() {
       loadError.value = m.error || '这一章拿不到图片'
     } else {
       readingIdentity = { kind: kind.value, comicId: comicId.value, order: order.value, title: title.value, key: storeKey.value }
-      ready = true
       await nextTick()
+      if (my !== gen || disposed) return
+      ready = true
       restorePosition()
       preload(page.value)
     }
@@ -307,10 +343,17 @@ function restorePosition() {
   scrollToPage(Math.min(meta.pages, Math.max(1, Number(target) || 1)), false)
 }
 
-function scrollToPage(p, smooth = true) {
+function jumpPage(value) {
+  const p = Math.min(meta.pages, Math.max(1, Math.trunc(Number(value)) || 1))
+  if (!ready || !meta.pages) return
+  scrollToPage(p, false)
+  saveProgress()
+  preload(p)
+}
+function scrollToPage(p, smooth = false) {
   const el = scroller.value?.querySelector(`.rd-item[data-page="${p}"]`)
   if (!el) return
-  scroller.value.scrollTo({ top: el.offsetTop - 2, behavior: smooth ? 'smooth' : 'auto' })
+  scroller.value.scrollTo({ top: Math.max(0, el.offsetTop - 58), behavior: smooth ? 'smooth' : 'auto' })
   page.value = p
 }
 
@@ -327,7 +370,7 @@ function onScroll() {
 
 function updateCurrentPage() {
   const sc = scroller.value
-  if (!sc) return
+  if (!sc || !ready || loading.value) return
   const probe = sc.scrollTop + sc.clientHeight * 0.4
   // Query the page container once; binary search only reads O(log n) offsets.
   const container = sc.querySelector('.rd-item')?.parentElement
@@ -362,7 +405,22 @@ function preload(cur) {
     }
   }
   preloader.schedule(needed, pageUrl, (p, w, h) => {
-    if (w && h) natSize[p] = [w, h]
+    if (w && h) setNaturalSize(p, w, h)
+  })
+}
+
+let anchoring = false
+function setNaturalSize(p, w, h) {
+  const sc = scroller.value
+  const anchor = sc?.querySelector(`.rd-item[data-page="${page.value}"]`)
+  const before = anchor?.offsetTop
+  const my = gen
+  natSize[p] = [w, h]
+  if (anchoring || !anchor || p >= page.value) return
+  anchoring = true
+  nextTick(() => {
+    anchoring = false
+    if (!disposed && my === gen && sc && anchor.isConnected) sc.scrollTop += anchor.offsetTop - before
   })
 }
 
@@ -371,7 +429,7 @@ function onLoaded(p, e) {
   loaded[p] = true
   delete failed[p]
   const im = e?.target
-  if (im && im.naturalWidth) natSize[p] = [im.naturalWidth, im.naturalHeight]
+  if (im && im.naturalWidth) setNaturalSize(p, im.naturalWidth, im.naturalHeight)
   if (p === page.value) preload(p)
 }
 function onError(p, e) {
@@ -398,6 +456,7 @@ function retry(p) {
 }
 
 function flip(dir) {
+  if (!ready || !meta.pages) return
   if (fit.value === 'height' || fit.value === 'width') {
     // 逐页滚动：适高模式一屏一页，适宽模式滚一页
     const target = Math.min(Math.max(page.value + dir, 1), meta.pages || 1)
@@ -414,26 +473,18 @@ function toggleBar() {
 
 function toggleDark() {
   dark.value = !dark.value
-  localStorage.setItem('ms-reader-dark', dark.value ? '1' : '0')
-}
-
-function onCommand(cmd) {
-  if (cmd === 'theme') {
-    toggleDark()
-    return
-  }
-  fit.value = cmd
-  applyFit()
+  persist('ms-reader-dark', dark.value ? '1' : '0')
 }
 
 function applyFit() {
-  localStorage.setItem('ms-reader-fit', fit.value)
-  nextTick(() => scrollToPage(page.value, false))
+  persist('ms-reader-fit', fit.value)
+  const current = page.value
+  nextTick(() => scrollToPage(current, false))
 }
 
 function switchChapter(next) {
   const n = Number(next)
-  if (!n || n < 1 || (chapters.value.length && n > chapters.value.length) || n === order.value) return
+  if (!chapters.value.some(ch => ch.order === n) || n === order.value) return
   saveProgress()
   router.replace(`/reader/${kind.value}/${encodeURIComponent(comicId.value)}/${n}`)
 }
@@ -445,7 +496,7 @@ async function repairChapter() {
     if (!account) return router.push('/accounts')
     await api.createDownload({ kind: kind.value, comicId: comicId.value, accountId: account.id, chapters: [order.value], title: title.value })
     loadError.value = '已加入下载队列，下载完成后点击重试'
-  } catch (_) { /* API provides the actionable error. */ }
+  } catch (e) { ElMessage.error(e?.message || '加入下载队列失败，请重试') }
 }
 function back() {
   saveProgress()
@@ -459,7 +510,9 @@ function back() {
 let touchStart = null
 let lastTouchAt = 0
 
+function interactive(target) { return !!target?.closest?.('button, a, input, select, textarea, [role=button], [contenteditable=true]') }
 function onTouchStart(e) {
+  if (e.touches?.length !== 1 || interactive(e.target)) { touchStart = null; return }
   const t = e.touches && e.touches[0]
   if (!t) return
   touchStart = { x: t.clientX, y: t.clientY, at: Date.now() }
@@ -467,7 +520,7 @@ function onTouchStart(e) {
 
 function onTouchEnd(e) {
   lastTouchAt = Date.now()
-  if (!touchStart) return
+  if (!touchStart || e.touches?.length || interactive(e.target)) { touchStart = null; return }
   const t = (e.changedTouches && e.changedTouches[0]) || null
   const start = touchStart
   touchStart = null
@@ -481,14 +534,14 @@ function onTouchEnd(e) {
   if (!sc) return
   const r = sc.getBoundingClientRect()
   const x = (t.clientX - r.left) / r.width
-  if (x < 0.3) flip(-1)
-  else if (x > 0.7) flip(1)
+  if (tapToTurn.value && x < 0.3) flip(-1)
+  else if (tapToTurn.value && x > 0.7) flip(1)
   else toggleBar()
 }
 
 /** 宽屏鼠标：点图片中间区域切换工具栏（触屏刚处理过的合成 click 直接忽略） */
 function onTap(e) {
-  if (isMobile.value) return // 触屏已在 onTouchEnd 处理
+  if (interactive(e.target)) return
   if (Date.now() - lastTouchAt < 600) return // 触屏设备上紧跟的合成 click，避免双动作
   const sc = scroller.value
   if (!sc) return
@@ -498,11 +551,16 @@ function onTap(e) {
 }
 
 function onKey(e) {
-  if (e.target && ['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return
+  if (settingsOpen.value || e.ctrlKey || e.metaKey || e.altKey || interactive(e.target) || e.target?.closest?.('[role=listbox], [role=dialog]')) return
   switch (e.key) {
+    case ' ':
+      scroller.value?.scrollBy({ top: (e.shiftKey ? -1 : 1) * scroller.value.clientHeight * 0.85, behavior: 'auto' })
+      e.preventDefault()
+      break
+    case 'Home': jumpPage(1); e.preventDefault(); break
+    case 'End': jumpPage(meta.pages); e.preventDefault(); break
     case 'ArrowRight':
     case 'PageDown':
-    case ' ':
       flip(1)
       e.preventDefault()
       break
@@ -512,23 +570,24 @@ function onKey(e) {
       e.preventDefault()
       break
     case 'n':
-      switchChapter(order.value + 1)
+      switchChapter(nextChapter.value?.order)
       break
     case 'p':
-      switchChapter(order.value - 1)
+      switchChapter(previousChapter.value?.order)
       break
     case 'f':
       fit.value = fit.value === 'width' ? 'height' : 'width'
       applyFit()
       break
     case 'Escape':
-      back()
+      barVisible.value = true
       break
   }
 }
 
-watch(() => route.fullPath, () => {
-  chapters.value = []
+watch(() => route.fullPath, (_, old) => {
+  saveProgress()
+  if (!old || readingIdentity?.kind !== kind.value || readingIdentity?.comicId !== comicId.value) chapters.value = []
   load()
 })
 
@@ -544,12 +603,16 @@ async function initialize() {
     await router.replace({ path, query: { page: saved?.page || 1 } })
   } else await load()
 }
+let resizeTimer = null
+function onResize() { const current = page.value; clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (ready && !disposed) scrollToPage(current, false) }, 120) }
 function onPageHide() { saveProgress(true) }
 function onVisibility() { if (document.hidden) saveProgress(true) }
 onMounted(() => {
   window.addEventListener('keydown', onKey)
   window.addEventListener('pagehide', onPageHide)
   document.addEventListener('visibilitychange', onVisibility)
+  document.addEventListener('fullscreenchange', onFullscreenChange)
+  window.addEventListener('resize', onResize)
   initialize()
 })
 onBeforeUnmount(() => {
@@ -563,6 +626,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('pagehide', onPageHide)
   document.removeEventListener('visibilitychange', onVisibility)
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
+  window.removeEventListener('resize', onResize)
+  clearTimeout(resizeTimer)
   if (rafId) cancelAnimationFrame(rafId)
 })
 
@@ -594,7 +660,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 8px 12px;
+  padding: calc(8px + env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
   background: rgba(255, 255, 255, 0.94);
   border-bottom: 1px solid #e5e7eb;
   backdrop-filter: blur(8px);
@@ -681,21 +747,21 @@ onBeforeUnmount(() => {
 .rd-scroll {
   flex: 1;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: auto;
+  position: relative;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
-  padding-top: 54px;
-  transition: padding-top 0.2s ease;
+  padding: calc(58px + env(safe-area-inset-top)) 0 calc(72px + env(safe-area-inset-bottom));
+  scrollbar-gutter: stable;
+  overflow-anchor: none;
 }
-.rd-scroll:not(.is-bar) {
-  padding-top: 0;
-}
+
 .rd-scroll.rd-snap {
   /* proximity 比 mandatory 柔和：不会「吸」得太急，滑动更跟手 */
   scroll-snap-type: y proximity;
 }
 .rd-pages {
-  max-width: 100%;
+  max-width: min(100%, var(--reading-width));
   margin: 0 auto;
 }
 .rd-item {
@@ -709,8 +775,7 @@ onBeforeUnmount(() => {
 }
 /* 图片绝对定位铺满占位块：占位比例与图片一致时无变形 */
 .rd-item img {
-  image-rendering: -webkit-optimize-contrast;
-  image-rendering: crisp-edges;
+  image-rendering: auto;
   position: absolute;
   inset: 0;
   width: 100%;
@@ -727,21 +792,21 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 .rd-fit-height .rd-item {
-  height: 100vh;
+  height: calc(100dvh - 132px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  min-height: 200px;
   scroll-snap-align: start;
 }
 .rd-fit-height .rd-item img {
-  image-rendering: -webkit-optimize-contrast;
-  image-rendering: crisp-edges;
+  image-rendering: auto;
   object-fit: contain;
 }
 .rd-fit-original .rd-pages {
   width: max-content;
+  max-width: none;
   margin: 0 auto;
 }
 .rd-fit-original .rd-item img {
-  image-rendering: -webkit-optimize-contrast;
-  image-rendering: crisp-edges;
+  image-rendering: auto;
   object-fit: contain;
 }
 
@@ -820,7 +885,7 @@ onBeforeUnmount(() => {
 /* ---------- 手机端（≤768px，与全站断点一致） ---------- */
 @media (max-width: 768px) {
   .rd-bar {
-    padding: 6px 8px;
+    padding: calc(6px + env(safe-area-inset-top)) 8px 6px;
     gap: 6px;
   }
   .rd-back-txt {
@@ -833,8 +898,29 @@ onBeforeUnmount(() => {
   .rd-chap {
     width: 116px;
   }
-  .rd-scroll {
-    padding-top: 50px;
-  }
+  .rd-pages { max-width: 100%; }
+  .rd-chap, .rd-grp, .rd-page, .rd-theme, .rd-fit { display: none; }
+  .rd-title { flex: 1; }
+  .rd-name, .rd-sub { max-width: 55vw; }
+  .rd-right { gap: 4px; }
+  .rd-bar .el-button { min-height: 40px; }
 }
+
+.rd-bottom { position: absolute; bottom: 0; left: 0; right: 0; z-index: 30; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 8px max(16px, env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)); background: rgba(255,255,255,.95); border-top: 1px solid #dce1e8; backdrop-filter: blur(12px); transition: transform .2s, opacity .2s; }
+.rd-bottom.is-hidden { transform: translateY(100%); opacity: 0; pointer-events: none; }
+.rd-dark .rd-bottom { background: rgba(26,29,35,.95); border-color: #353b46; }
+.rd-control { width: 44px; height: 44px; border: 1px solid #9099a650; border-radius: 12px; background: transparent; color: inherit; font-size: 28px; cursor: pointer; }
+.rd-control:disabled { opacity: .3; cursor: default; }
+.rd-seek { flex: 1; max-width: 560px; min-width: 40px; height: 40px; accent-color: #527dce; }
+.rd-jump { white-space: nowrap; font-size: 13px; font-variant-numeric: tabular-nums; }
+.rd-jump input { width: 54px; height: 40px; text-align: center; border: 1px solid #9099a650; border-radius: 8px; color: inherit; background: transparent; font: inherit; }
+.rd-peek { position: absolute; right: max(16px, env(safe-area-inset-right)); bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 30; padding: 10px 16px; border: 1px solid #ffffff30; border-radius: 24px; color: #fff; background: #202630cc; cursor: pointer; }
+.rd-setting-group { display: block; margin-bottom: 24px; }
+.rd-setting-group input[type=range] { display: block; width: 100%; margin-top: 16px; }
+.rd-setting-group .el-radio-group { display: flex; flex-wrap: wrap; gap: 4px; }
+.rd-help { font-size: 13px; line-height: 1.8; color: #77818d; }
+.rd-scroll:focus-visible, .rd-control:focus-visible, .rd-peek:focus-visible { outline: 2px solid #527dce; outline-offset: -2px; }
+@media (max-width: 768px) { :global(.rd-settings) { max-height: 85dvh; padding-bottom: env(safe-area-inset-bottom); } }
+@media (prefers-reduced-motion: reduce) { .rd *, .rd *::before { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+@media (min-width: 769px) and (max-width: 1150px) { .rd-fit, .rd-grp { display: none; } .rd-name, .rd-sub { max-width: 24vw; } }
 </style>
