@@ -279,14 +279,8 @@ func (e *Engine) dispatch(ctx context.Context) {
 
 func (e *Engine) runJob(ctx context.Context, j *store.Job) {
 	ctx = source.WithDownloadGuard(ctx, e.waitDownload)
-	if j.Title == "" {
-		if src, err := e.SourceFor(j.Kind); err == nil {
-			if d, err := src.Detail(ctx, e.Cred(&store.Account{Kind: j.Kind}), j.ComicID); err == nil {
-				j.Title = d.Title
-				_ = e.st.SetJobTitle(j.ID, d.Title)
-			}
-		}
-	}
+	ctx = source.WithTransferPool(ctx, j.Kind, e.cfg.Get().ImageWorkers)
+
 	e.log(j.ID, "info", fmt.Sprintf("任务 #%d 开始: %s (%s)", j.ID, j.Title, j.ComicID))
 
 	acc, err := e.st.GetAccount(j.AccountID)
@@ -349,8 +343,13 @@ func (e *Engine) runJob(ctx context.Context, j *store.Job) {
 		}
 	}
 
+	verifiedSource := source.DownloadSnapshot{Source: src, Result: res}
 	// 统计落盘结果（无论成功失败都刷新一下本地库）
 	if res != nil && res.Path != "" {
+		if res.Title != "" {
+			j.Title = res.Title
+			_ = e.st.SetJobTitle(j.ID, res.Title)
+		}
 		_ = e.st.SetJobPath(j.ID, res.Path)
 		imgs, bytes := dirStats(res.Path)
 		title := res.Title
@@ -358,7 +357,7 @@ func (e *Engine) runJob(ctx context.Context, j *store.Job) {
 			title = j.Title
 		}
 		chapters, chaptersDone := 0, 0
-		if d, err := src.Detail(ctx, cred, j.ComicID); err == nil {
+		if d, err := verifiedSource.Detail(ctx, cred, j.ComicID); err == nil {
 			chapters = len(d.Chapters)
 			if title == j.Title || title == "" {
 				title = d.Title
@@ -385,8 +384,24 @@ func (e *Engine) runJob(ctx context.Context, j *store.Job) {
 	}
 
 	if ctx.Err() == nil {
-		if _, err := e.verifyComic(ctx, src, cred, j.ComicID); err != nil && dlErr == nil {
+		missing, err := e.verifyComic(ctx, verifiedSource, cred, j.ComicID)
+		if err != nil && dlErr == nil {
 			dlErr = fmt.Errorf("下载后校验失败: %w", err)
+		}
+		if dlErr == nil {
+			for _, order := range missing {
+				requested := len(j.Chapters) == 0
+				for _, want := range j.Chapters {
+					if want == order {
+						requested = true
+						break
+					}
+				}
+				if requested {
+					dlErr = fmt.Errorf("下载后校验发现请求章节 %d 仍不完整", order)
+					break
+				}
+			}
 		}
 	}
 	switch {

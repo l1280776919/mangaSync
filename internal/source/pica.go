@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -75,9 +76,12 @@ func NewPica(proxy, quality string, imageWorkers int) *Pica {
 
 func newHTTPClient(proxy string, timeout time.Duration) *http.Client {
 	tr := &http.Transport{
-		MaxIdleConns:        64,
-		MaxIdleConnsPerHost: 16,
-		IdleConnTimeout:     60 * time.Second,
+		DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		MaxIdleConns:          64,
+		MaxIdleConnsPerHost:   16,
+		IdleConnTimeout:       60 * time.Second,
 	}
 	if proxy != "" {
 		if u, err := url.Parse(proxy); err == nil {
@@ -589,50 +593,13 @@ func (p *Pica) fetchImage(ctx context.Context, u string, _ string, _ string) ([]
 	if err := waitDownload(ctx); err != nil {
 		return nil, "", err
 	}
-	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return nil, "", err
+	return fetchImageRetry(ctx, p.img, u, func(r *http.Request, fallback bool) {
+		r.Header.Set("User-Agent", "okhttp/3.8.1")
+		if fallback {
+			r.Header.Set("User-Agent", "Mozilla/5.0")
+			r.Header.Set("Referer", "https://manhuabika.com/")
 		}
-		req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-		if err != nil {
-			return nil, "", err
-		}
-		req.Header.Set("User-Agent", "okhttp/3.8.1")
-		resp, err := p.img.Do(req)
-		if err == nil && resp.StatusCode == 403 {
-			resp.Body.Close()
-			req2, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
-			req2.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-			req2.Header.Set("Referer", "https://manhuabika.com/")
-			resp, err = p.img.Do(req2)
-		}
-		if err != nil {
-			lastErr = err
-			time.Sleep(time.Duration(attempt+1) * 800 * time.Millisecond)
-			continue
-		}
-		b, readErr := io.ReadAll(io.LimitReader(resp.Body, (64<<20)+1))
-		ct := resp.Header.Get("Content-Type")
-		resp.Body.Close()
-		if readErr != nil {
-			return nil, "", readErr
-		}
-		if len(b) > 64<<20 {
-			return nil, "", fmt.Errorf("图片超过大小限制")
-		}
-		if resp.StatusCode != 200 {
-			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-			time.Sleep(time.Duration(attempt+1) * 800 * time.Millisecond)
-			continue
-		}
-		if !isImage(b) {
-			lastErr = fmt.Errorf("返回的不是图片(%d 字节)", len(b))
-			continue
-		}
-		return b, ct, nil
-	}
-	return nil, "", fmt.Errorf("下载失败 %s: %v", u, lastErr)
+	})
 }
 
 // chapterImageURLs 取某章的全部图片链接（按页序合并）
@@ -779,7 +746,7 @@ func (p *Pica) Download(ctx context.Context, cred *Cred, comicID string, orders 
 	p.saveCoverAndMeta(ctx, cred, detail, cdir)
 
 	total := Progress{ChaptersTotal: len(selected)}
-	res := &Result{Path: cdir, Title: detail.Title}
+	res := &Result{Detail: detail, Verified: map[int]int{}, Path: cdir, Title: detail.Title}
 	var failedChapters []string
 	h.log("info", fmt.Sprintf("开始下载《%s》共 %d 章 → %s", detail.Title, len(selected), cdir))
 
@@ -808,10 +775,13 @@ func (p *Pica) Download(ctx context.Context, cred *Cred, comicID string, orders 
 			h.log("info", fmt.Sprintf("  %s 已存在且完整(%d 张)，跳过", cname, n))
 			total.ChaptersDone++
 			total.ImagesDone += n
+			total.ImagesTotal += n
+			total.CurrentChapter = ch.Title
 			total.Bytes += b
 			res.Images += n
 			res.Bytes += b
 			res.ChaptersDone++
+			res.Verified[ch.Order] = len(urls)
 			h.chap(ChapterState{Order: ch.Order, Title: ch.Title, State: "done", Images: n, Path: cpath})
 			h.prog(total)
 			continue
@@ -821,8 +791,15 @@ func (p *Pica) Download(ctx context.Context, cred *Cred, comicID string, orders 
 		if err := preparePageManifest(tmp, append([]string{comicID, ch.ID}, urls...)); err != nil {
 			return res, err
 		}
+		if err := seedChapterRepair(cpath, tmp, append([]string{comicID, ch.ID}, urls...), urls); err != nil {
+			return res, err
+		}
+		total.CurrentChapter = ch.Title
+		total.ImagesTotal += len(urls)
 		n, b, err := p.downloadImages(ctx, urls, tmp, h, total)
 		if err != nil {
+			total.ImagesDone += n
+			total.Bytes += b
 			failedChapters = append(failedChapters, fmt.Sprintf("%d %s", ch.Order, ch.Title))
 			h.chap(ChapterState{Order: ch.Order, Title: ch.Title, State: "failed", Err: err.Error()})
 			h.log("error", fmt.Sprintf("章节 %d 下载失败: %v", ch.Order, err))
@@ -839,6 +816,7 @@ func (p *Pica) Download(ctx context.Context, cred *Cred, comicID string, orders 
 		res.Images += n
 		res.Bytes += b
 		res.ChaptersDone++
+		res.Verified[ch.Order] = len(urls)
 		h.chap(ChapterState{Order: ch.Order, Title: ch.Title, State: "done", Images: n, Path: cpath})
 		h.prog(total)
 		h.log("info", fmt.Sprintf("  %s · %d 张 %s ✓", cname, n, humanBytes(b)))
@@ -859,7 +837,7 @@ func (p *Pica) downloadImages(ctx context.Context, urls []string, dir string, h 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var imagesDone, imagesTotal = 0, len(urls)
-	var bytesDone int64
+	var bytesDone, networkBytes int64
 	var failed []string
 	start := time.Now()
 
@@ -882,12 +860,13 @@ func (p *Pica) downloadImages(ctx context.Context, urls []string, dir string, h 
 		if err = writeFileAtomic(dst, b); err != nil {
 			return err
 		}
-		if err = saveImageReceipt(dst); err != nil {
+		if err = writeImageReceipt(dst, b); err != nil {
 			return err
 		}
 		mu.Lock()
 		imagesDone++
 		bytesDone += int64(len(b))
+		networkBytes += int64(len(b))
 		mu.Unlock()
 		return nil
 	}
@@ -922,15 +901,15 @@ func (p *Pica) downloadImages(ctx context.Context, urls []string, dir string, h 
 				return
 			case <-t.C:
 				mu.Lock()
-				pd, bt := imagesDone, bytesDone
+				pd, bt, transferred := imagesDone, bytesDone, networkBytes
 				mu.Unlock()
 				el := time.Since(start).Seconds()
 				cur := base
-				cur.ImagesDone = pd
-				cur.ImagesTotal = imagesTotal
-				cur.Bytes = bt
+				cur.ImagesDone = base.ImagesDone + pd
+				cur.ImagesTotal = max(base.ImagesTotal, base.ImagesDone+imagesTotal)
+				cur.Bytes = base.Bytes + bt
 				if el > 0.5 {
-					cur.SpeedBps = int64(float64(bt) / el)
+					cur.SpeedBps = int64(float64(transferred) / el)
 				}
 				h.prog(cur)
 			}

@@ -125,7 +125,13 @@ func jmDescramble(src image.Image, num int) *image.RGBA {
 // 返回实际写入的路径（回落 PNG 时扩展名会变）。
 func jmSaveImage(raw []byte, num int, dstPath string) (string, error) {
 	if num <= 0 {
+		if !validImageBytes(raw) {
+			return "", fmt.Errorf("图片数据不完整")
+		}
 		if err := writeFileAtomic(dstPath, raw); err != nil {
+			return "", err
+		}
+		if err := writeImageReceipt(dstPath, raw); err != nil {
 			return "", err
 		}
 		return dstPath, nil
@@ -140,6 +146,9 @@ func jmSaveImage(raw []byte, num int, dstPath string) (string, error) {
 	if err := writeFileAtomic(dstPath, data); err != nil {
 		return "", err
 	}
+	if err := writeImageReceipt(dstPath, data); err != nil {
+		return "", err
+	}
 	return dstPath, nil
 }
 
@@ -152,6 +161,12 @@ func jmSaveImage(raw []byte, num int, dstPath string) (string, error) {
 func jmEncodePage(raw []byte, num int, mode string) ([]byte, string, error) {
 	if num <= 0 {
 		return raw, "webp", nil
+	}
+	imageProcessingSlots <- struct{}{}
+	defer func() { <-imageProcessingSlots }()
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil || cfg.Width < 1 || cfg.Height < 1 || int64(cfg.Width)*int64(cfg.Height) > 100000000 {
+		return nil, "", fmt.Errorf("图片尺寸不合法")
 	}
 	src, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {

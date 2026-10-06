@@ -12,7 +12,12 @@ import (
 	"strings"
 )
 
+// Bound memory-intensive decode/encode work across concurrent books and both sources.
+var imageProcessingSlots = make(chan struct{}, 2)
+
 func validImageBytes(b []byte) bool {
+	imageProcessingSlots <- struct{}{}
+	defer func() { <-imageProcessingSlots }()
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(b))
 	if err != nil || cfg.Width < 1 || cfg.Height < 1 || int64(cfg.Width)*int64(cfg.Height) > 100000000 {
 		return false
@@ -43,7 +48,7 @@ func saveImageReceipt(path string) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(path+".sha256", []byte(fmt.Sprintf("%x", sha256.Sum256(b))))
+	return writeImageReceipt(path, b)
 }
 func preparePageManifest(dir string, ids []string) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -149,4 +154,37 @@ func pageManifestMatches(dir string, ids []string) bool {
 	}
 	raw, _ := json.Marshal(ids)
 	return err == nil && bytes.Equal(old, raw)
+}
+
+func writeImageReceipt(path string, b []byte) error {
+	return writeFileAtomic(path+".sha256", []byte(fmt.Sprintf("%x", sha256.Sum256(b))))
+}
+
+// Seed a repair staging directory only from the same page manifest.
+func seedChapterRepair(src, dst string, ids []string, urls []string) error {
+	if !pageManifestMatches(src, ids) {
+		return nil
+	}
+	for i, u := range urls {
+		name := fmt.Sprintf("%03d%s", i+1, imgExtFromURL(u))
+		target := filepath.Join(dst, name)
+		if _, ok := validImageFile(target); ok {
+			continue
+		}
+		original := filepath.Join(src, name)
+		if _, ok := validImageFile(original); !ok {
+			continue
+		}
+		b, err := os.ReadFile(original)
+		if err != nil {
+			return err
+		}
+		if err = writeFileAtomic(target, b); err != nil {
+			return err
+		}
+		if err = writeImageReceipt(target, b); err != nil {
+			return err
+		}
+	}
+	return nil
 }

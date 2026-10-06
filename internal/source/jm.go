@@ -32,7 +32,7 @@ type JM struct {
 	imgCache      map[string]jmImgEntry  // photoID -> 图片文件名表
 
 	api *http.Client // API 请求（带超时）
-	img *http.Client // 图片下载（大文件，不设整体超时）
+	img *http.Client // 图片下载（每次请求最多 120 秒）
 }
 
 // NewJM 创建禁漫源；proxy 为空表示直连
@@ -48,7 +48,7 @@ func NewJM(proxy string, imageWorkers int) *JM {
 		chapCache:     map[string]jmChapEntry{},
 		imgCache:      map[string]jmImgEntry{},
 		api:           newHTTPClient(proxy, 45*time.Second),
-		img:           newHTTPClient(proxy, 0),
+		img:           newHTTPClient(proxy, 120*time.Second),
 	}
 }
 
@@ -824,7 +824,7 @@ func (j *JM) Download(ctx context.Context, cred *Cred, comicID string, orders []
 	}
 	multi := len(c.Chapters) > 1
 
-	res := &Result{Path: albumDir, Title: c.Title}
+	res := &Result{Detail: c, Verified: map[int]int{}, Path: albumDir, Title: c.Title}
 	var (
 		failedChapters []string
 		mu             sync.Mutex
@@ -832,12 +832,15 @@ func (j *JM) Download(ctx context.Context, cred *Cred, comicID string, orders []
 		imagesTotal    int
 		bytesTotal     int64
 	)
+	var callbackMu sync.Mutex
+	started := time.Now()
+	var networkBytes int64
 	prog := func(cur string) {
 		mu.Lock()
 		p := Progress{
 			ChaptersTotal: len(selected), ChaptersDone: res.ChaptersDone,
 			ImagesTotal: imagesTotal, ImagesDone: imagesDone,
-			Bytes: bytesTotal, CurrentChapter: cur,
+			Bytes: bytesTotal, CurrentChapter: cur, SpeedBps: int64(float64(networkBytes) / max(time.Since(started).Seconds(), 0.001)),
 		}
 		mu.Unlock()
 		h.prog(p)
@@ -876,6 +879,7 @@ func (j *JM) Download(ctx context.Context, cred *Cred, comicID string, orders []
 		if n, bytes := dirImageStats(dir); n == len(imgs) && completeImageFiles(dir, len(imgs)) {
 			h.log("info", fmt.Sprintf("章节《%s》已存在且完整（%d 张），跳过", ch.Title, n))
 			res.ChaptersDone++
+			res.Verified[ch.Order] = len(imgs)
 			res.Images += n
 			res.Bytes += bytes
 			mu.Lock()
@@ -893,22 +897,28 @@ func (j *JM) Download(ctx context.Context, cred *Cred, comicID string, orders []
 
 		sid := j.scrambleID(ctx, cred, ch.ID)
 		n, b, skipped, derr := j.downloadChapter(ctx, cred, ch.ID, imgs, dir, sid, func() {
+			callbackMu.Lock()
+			defer callbackMu.Unlock()
 			mu.Lock()
 			imagesDone++
 			p := Progress{
 				ChaptersTotal: len(selected), ChaptersDone: res.ChaptersDone,
 				ImagesTotal: imagesTotal, ImagesDone: imagesDone,
-				Bytes: bytesTotal, CurrentChapter: ch.Title,
+				Bytes: bytesTotal, CurrentChapter: ch.Title, SpeedBps: int64(float64(networkBytes) / max(time.Since(started).Seconds(), 0.001)),
 			}
 			mu.Unlock()
 			h.prog(p)
 		}, func(delta int64) {
 			mu.Lock()
 			bytesTotal += delta
+			networkBytes += delta
 			mu.Unlock()
 		})
 		mu.Lock()
 		imagesDone += skipped
+		// Set the final chapter bytes from disk; transfer speed uses only network bytes.
+		_, chapterBytes := dirImageStats(dir)
+		bytesTotal = res.Bytes + chapterBytes
 		mu.Unlock()
 
 		if derr != nil {
@@ -918,8 +928,10 @@ func (j *JM) Download(ctx context.Context, cred *Cred, comicID string, orders []
 			continue
 		}
 		res.ChaptersDone++
+		res.Verified[ch.Order] = len(imgs)
 		res.Images += n + skipped
-		res.Bytes += b
+		_, storedBytes := dirImageStats(dir)
+		res.Bytes += storedBytes
 		h.chap(ChapterState{Order: ch.Order, Title: ch.Title, State: "done", Images: n + skipped, Path: dir})
 		h.log("info", fmt.Sprintf("章节《%s》完成: %d 张 / %s", ch.Title, n+skipped, humanBytes(b)))
 		prog(ch.Title)
@@ -971,7 +983,6 @@ func (j *JM) downloadChapter(ctx context.Context, cred *Cred, photoID string, na
 					skipped++
 					bytesTotal += existing
 					mu.Unlock()
-					onBytes(existing)
 					continue
 				}
 
@@ -985,18 +996,8 @@ func (j *JM) downloadChapter(ctx context.Context, cred *Cred, photoID string, na
 					continue
 				}
 				num := jmSegNum(scrambleID, jmAid(photoID), it.name)
-				if !validImageBytes(raw) {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = fmt.Errorf("图片数据不完整")
-					}
-					mu.Unlock()
-					continue
-				}
-				saved, err := jmSaveImage(raw, num, dst)
-				if err == nil {
-					err = saveImageReceipt(saved)
-				}
+				_, err = jmSaveImage(raw, num, dst)
+
 				if err != nil {
 					mu.Lock()
 					if firstErr == nil {
@@ -1036,6 +1037,8 @@ func (j *JM) fetchImage(ctx context.Context, photoID, filename string) ([]byte, 
 	if err := waitDownload(ctx); err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
 	var lastErr error
 	domains := func() []string {
 		j.mu.Lock()
@@ -1050,42 +1053,28 @@ func (j *JM) fetchImage(ctx context.Context, photoID, filename string) ([]byte, 
 		return out
 	}
 	for _, domain := range domains() {
-		for attempt := 0; attempt < 2; attempt++ {
-			u := fmt.Sprintf("https://%s/media/photos/%s/%s?v=%d", domain, photoID, filename, time.Now().Unix())
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-			if err != nil {
-				return nil, err
-			}
-			req.Header.Set("user-agent", jmMobileUA)
-			req.Header.Set("Referer", "https://"+jmAPIDomains[0])
-			req.Header.Set("X-Requested-With", "com.JMComic3.app")
-			req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
-			resp, err := j.img.Do(req)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
-			_ = resp.Body.Close()
-			if rerr != nil {
-				lastErr = rerr
-				continue
-			}
-			if resp.StatusCode != http.StatusOK {
-				lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-				continue
-			}
-			if !isImage(raw) {
-				// 空数据/防盗链页
-				lastErr = errors.New("返回内容不是图片")
-				continue
-			}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		u := fmt.Sprintf("https://%s/media/photos/%s/%s", domain, photoID, filename)
+		raw, _, err := fetchImageRetry(ctx, j.img, u, func(r *http.Request, _ bool) {
+			r.Header.Set("User-Agent", jmMobileUA)
+			r.Header.Set("Referer", "https://"+jmAPIDomains[0])
+			r.Header.Set("X-Requested-With", "com.JMComic3.app")
+		})
+		if err == nil {
 			j.mu.Lock()
 			j.imageDomain = domain
 			j.mu.Unlock()
 			return raw, nil
 		}
+		lastErr = err
+		var upstream *UpstreamError
+		if errors.As(err, &upstream) && (upstream.Status == 429 || upstream.Status == 401 || upstream.Status == 403) {
+			return nil, err
+		}
 	}
+
 	if lastErr == nil {
 		lastErr = errors.New("图片下载失败")
 	}

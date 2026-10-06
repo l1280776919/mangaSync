@@ -126,6 +126,8 @@ func (h Hooks) chap(s ChapterState) {
 }
 
 type Result struct {
+	Detail       *Comic
+	Verified     map[int]int
 	Path         string
 	Images       int
 	Bytes        int64
@@ -178,4 +180,25 @@ func (c *Comic) UnmarshalJSON(raw []byte) error {
 		return json.Unmarshal(ch, &c.ChaptersCount)
 	}
 	return nil
+}
+
+// DownloadSnapshot reuses metadata and page counts already fetched and verified by this download.
+type DownloadSnapshot struct {
+	Source
+	Result *Result
+}
+
+func (s DownloadSnapshot) Detail(ctx context.Context, c *Cred, id string) (*Comic, error) {
+	if s.Result != nil && s.Result.Detail != nil {
+		return s.Result.Detail, nil
+	}
+	return s.Source.Detail(ctx, c, id)
+}
+func (s DownloadSnapshot) Pages(ctx context.Context, c *Cred, id string, order int) (int, string, error) {
+	if s.Result != nil {
+		if n, ok := s.Result.Verified[order]; ok {
+			return n, "", nil
+		}
+	}
+	return s.Source.Pages(ctx, c, id, order)
 }

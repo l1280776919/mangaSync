@@ -14,7 +14,22 @@ func WithDownloadGuard(ctx context.Context, guard func(context.Context) error) c
 }
 
 // Background transfers leave capacity for reader/API traffic. Slots are held until the body closes.
-var backgroundSlots = make(chan struct{}, 4)
+type transferKey struct{}
+type transferPool struct{ slots chan struct{} }
+
+var transferPools sync.Map
+
+func WithTransferPool(ctx context.Context, kind string, workers int) context.Context {
+	workers = max(1, min(workers, 16))
+	key := struct {
+		kind    string
+		workers int
+	}{kind, workers}
+	pool, _ := transferPools.LoadOrStore(key, &transferPool{slots: make(chan struct{}, workers)})
+	return context.WithValue(ctx, transferKey{}, pool.(*transferPool))
+}
+
+var defaultTransferPool = &transferPool{slots: make(chan struct{}, 4)}
 
 type priorityTransport struct{ base http.RoundTripper }
 type releaseBody struct {
@@ -29,12 +44,16 @@ func (t priorityTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if guard == nil {
 		return t.base.RoundTrip(r)
 	}
+	pool, _ := r.Context().Value(transferKey{}).(*transferPool)
+	if pool == nil {
+		pool = defaultTransferPool
+	}
 	select {
-	case backgroundSlots <- struct{}{}:
+	case pool.slots <- struct{}{}:
 	case <-r.Context().Done():
 		return nil, r.Context().Err()
 	}
-	release := func() { <-backgroundSlots }
+	release := func() { <-pool.slots }
 	resp, err := t.base.RoundTrip(r)
 	if err != nil {
 		release()
