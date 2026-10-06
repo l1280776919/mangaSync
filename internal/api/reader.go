@@ -126,7 +126,7 @@ func (s *Server) readerPage(w http.ResponseWriter, r *http.Request) {
 		for _, ext := range []string{"webp", "jpg", "png", "gif"} {
 			p := filepath.Join(cacheDir, fmt.Sprintf("%05d.%s", page, ext))
 			if data, e := os.ReadFile(p); e == nil && len(data) > 0 {
-				return data, contentTypeByExt(p), nil
+				return data, http.DetectContentType(data), nil
 			}
 		}
 		b, ct, err := src.PageImage(ctx, cred, comicID, order, page, false)
@@ -159,6 +159,16 @@ func serveCachedFile(w http.ResponseWriter, r *http.Request, path string, fi os.
 	w.Header().Set("Cache-Control", "private, no-cache")
 	w.Header().Set("ETag", fmt.Sprintf(`"%x-%x"`, fi.Size(), fi.ModTime().UnixNano()))
 	_ = os.Chtimes(path, time.Now(), fi.ModTime())
+	// Older JM downloads may contain WebP bytes under a .jpg/.png name.
+	// Serve the actual format so strict image clients do not reject valid pages.
+	if f, err := os.Open(path); err == nil {
+		var head [512]byte
+		n, _ := f.Read(head[:])
+		_ = f.Close()
+		if ct := http.DetectContentType(head[:n]); strings.HasPrefix(ct, "image/") {
+			w.Header().Set("Content-Type", ct)
+		}
+	}
 	http.ServeFile(w, r, path)
 }
 

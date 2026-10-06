@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/gif"
+	"image/png"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,9 +30,14 @@ func TestJMGIFPreservesAnimationAndResume(t *testing.T) {
 	dst := filepath.Join(t.TempDir(), "00001.gif")
 	// Reproduce the old bug with a valid receipt: GIF decoded to one scrambled frame,
 	// encoded as WebP, but still stored with a .gif suffix.
-	old, _, err := jmEncodePage(raw.Bytes(), 10, "lossless")
-	if err != nil {
+	var legacy bytes.Buffer
+	if err := png.Encode(&legacy, jmDescramble(a, 10)); err != nil {
 		t.Fatal(err)
+	}
+	old := legacy.Bytes()
+	safe, ext, err := jmEncodePage(raw.Bytes(), 10, "lossless")
+	if err != nil || ext != "gif" || !bytes.Equal(safe, raw.Bytes()) {
+		t.Fatal("GIF byte detection failed")
 	}
 	if err = os.WriteFile(dst, old, 0600); err != nil {
 		t.Fatal(err)

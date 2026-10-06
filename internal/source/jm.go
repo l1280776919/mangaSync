@@ -781,7 +781,7 @@ func (j *JM) PageImage(ctx context.Context, cred *Cred, comicID string, order, p
 	}
 	num := jmSegNum(j.scrambleID(ctx, cred, ch.ID), jmAid(ch.ID), name)
 	if num <= 0 {
-		return raw, jmImageContentType(name), nil
+		return raw, http.DetectContentType(raw), nil
 	}
 	// 统一原画画质：不再使用有损 jpeg 二次压缩
 	mode := "lossless"

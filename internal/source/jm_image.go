@@ -43,20 +43,20 @@ func jmSegNum(scrambleID, aid int, filename string) int {
 		x = 10
 	}
 	page := filename
-	if i := strings.IndexByte(page, '.'); i > 0 {
+	if i := strings.LastIndexByte(page, '.'); i > 0 {
 		page = page[:i]
 	}
 	sum := md5Hex(fmt.Sprintf("%d%s", aid, page))
 	return int(sum[len(sum)-1])%x*2 + 2
 }
 
-// jmToRGBA 把解码结果转成 RGBA。
+// jmWebPToRGBA 把 WebP 解码结果转成 RGBA。
 //
 // 注意：Go 标准库的 image.YCbCr→RGBA 用的是 JFIF 全范围矩阵，而 VP8（webp 有损）存的是
 // 有限范围 YUV，直接 draw 会整体偏暗十几个色阶（实测均值 187 vs libwebp 199）。
 // 这里对 YCbCr 自己做 BT.601 有限范围转换（整数定点，与 libwebp/浏览器观感一致）；
 // 其它格式（PNG/GIF/JPEG）交给 draw 即可。
-func jmToRGBA(src image.Image) *image.RGBA {
+func jmWebPToRGBA(src image.Image) *image.RGBA {
 	if ycc, ok := src.(*image.YCbCr); ok {
 		b := ycc.Bounds()
 		dst := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
@@ -74,6 +74,14 @@ func jmToRGBA(src image.Image) *image.RGBA {
 		}
 		return dst
 	}
+	b := src.Bounds()
+	dst := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	draw.Draw(dst, dst.Bounds(), src, b.Min, draw.Src)
+	return dst
+}
+
+// JPEG YCbCr uses full-range JFIF values; never apply the VP8 limited-range matrix.
+func jmToRGBA(src image.Image) *image.RGBA {
 	b := src.Bounds()
 	dst := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
 	draw.Draw(dst, dst.Bounds(), src, b.Min, draw.Src)
@@ -128,7 +136,7 @@ func jmDescramble(src image.Image, num int) *image.RGBA {
 //
 // 返回实际写入的路径（回落 PNG 时扩展名会变）。
 func jmSaveImage(raw []byte, num int, dstPath string) (string, error) {
-	if num <= 0 {
+	if num <= 0 || isGIFBytes(raw) {
 		if !validImageBytes(raw) {
 			return "", fmt.Errorf("图片数据不完整")
 		}
@@ -163,8 +171,15 @@ func jmSaveImage(raw []byte, num int, dstPath string) (string, error) {
 //
 // 若原图本来没有乱序，两种模式都直接原样返回（零损失、零重编码）。
 func jmEncodePage(raw []byte, num int, mode string) ([]byte, string, error) {
-	if num <= 0 {
-		return raw, "webp", nil
+	if num <= 0 || isGIFBytes(raw) {
+		if !validImageBytes(raw) {
+			return nil, "", fmt.Errorf("图片数据不完整")
+		}
+		_, format, _ := image.DecodeConfig(bytes.NewReader(raw))
+		if format == "jpeg" {
+			format = "jpg"
+		}
+		return raw, format, nil
 	}
 	imageProcessingSlots <- struct{}{}
 	defer func() { <-imageProcessingSlots }()
@@ -172,9 +187,12 @@ func jmEncodePage(raw []byte, num int, mode string) ([]byte, string, error) {
 	if err != nil || cfg.Width < 1 || cfg.Height < 1 || int64(cfg.Width)*int64(cfg.Height) > 100000000 {
 		return nil, "", fmt.Errorf("图片尺寸不合法")
 	}
-	src, _, err := image.Decode(bytes.NewReader(raw))
+	src, format, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
 		return nil, "", fmt.Errorf("解码失败: %w", err)
+	}
+	if format == "webp" {
+		src = jmWebPToRGBA(src)
 	}
 	fixed := jmDescramble(src, num)
 
