@@ -20,7 +20,7 @@
  *       if (e?.name === 'AbortError' || !req.isCurrent(my)) return
  *       items.value = []
  *     } finally {
- *       req.end()
+ *       req.end(my)
  *       if (req.isCurrent(my)) loading.value = false
  *     }
  *   }
@@ -66,7 +66,8 @@ export function useLatestRequest(timeout = 20000) {
   }
 
   /** 请求收尾（清掉超时定时器） */
-  function end() {
+  function end(my) {
+    if (my !== seq) return
     clearTimer()
   }
 

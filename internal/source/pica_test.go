@@ -3,6 +3,8 @@ package source
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -43,5 +45,18 @@ func TestM2_TmpDirNameIsolated(t *testing.T) {
 	d := tmpDirName("001 - x", 0)
 	if c == d {
 		t.Fatalf("无任务号时应使用 pid+纳秒兜底: %s", c)
+	}
+}
+
+func TestNumberedPagesExcludeCoversAndGaps(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"cover.jpg", "001.jpg", "003.jpg"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("image"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, _ := dirImageStats(dir)
+	if n != 1 {
+		t.Fatalf("gap counted as complete: %d", n)
 	}
 }

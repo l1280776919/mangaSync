@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import api from '@/api'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Files,
@@ -14,6 +15,8 @@ import { auth } from '@/store/auth'
 import { logout } from '@/composables/useAuth'
 import { useIsMobile } from '@/composables/useIsMobile'
 
+const build = ref(null)
+api.health().then(v => { build.value = v }).catch(() => {})
 const route = useRoute()
 const router = useRouter()
 const store = useAppStore()
@@ -122,7 +125,7 @@ onMounted(async () => {
         <div class="foot-row">
           <el-icon class="foot-icon"><UserFilled /></el-icon>
           <span class="foot-user ms-ellipsis" :title="username">{{ username }}</span>
-          <span class="ms-dim foot-ver">v0.1.0</span>
+          <span class="ms-dim foot-ver">{{ build?.version || '—' }} · {{ build?.commit?.slice(0, 7) || 'dev' }}</span>
         </div>
         <div class="foot-row">
           <a href="#/settings">设置</a>
@@ -171,7 +174,7 @@ onMounted(async () => {
         <div class="foot-row">
           <el-icon class="foot-icon"><UserFilled /></el-icon>
           <span class="foot-user ms-ellipsis" :title="username">{{ username }}</span>
-          <span class="ms-dim foot-ver">v0.1.0</span>
+          <span class="ms-dim foot-ver">{{ build?.version || '—' }} · {{ build?.commit?.slice(0, 7) || 'dev' }}</span>
         </div>
         <div class="foot-row">
           <a href="#/settings">设置</a>

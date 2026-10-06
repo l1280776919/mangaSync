@@ -1,21 +1,17 @@
-/**
- * 在线阅读器的统一跳转路径与打开逻辑（收藏页 / 漫画库共用）。
- */
 export function readerPath(row, order = 1, fallbackKind = '') {
   const kind = row?.kind || fallbackKind
-  const comicId = row?.comicId || row?.id
+  const comicId = row?.comicId
   if (!kind || !comicId) return null
   return `/reader/${kind}/${encodeURIComponent(comicId)}/${order}`
 }
 
-/**
- * 默认在新窗口 / 新标签页打开阅读器，不打断用户当前的浏览上下文
- */
-export function openReaderWindow(row, order = 1, fallbackKind = '') {
+// Resume is resolved inside the reader, so opening a new tab stays synchronous.
+export function openReaderWindow(row, order = 1, fallbackKind = '', resume = true) {
   const path = readerPath(row, order, fallbackKind)
   if (!path) return
-  const fullUrl = window.location.origin + window.location.pathname + '#' + path
-  window.open(fullUrl, '_blank')
+  const url = window.location.pathname + '#' + path + (resume ? '?resume=1' : '?page=1')
+  const newTab = localStorage.getItem('ms-reader-new-tab') !== '0' && !window.matchMedia('(max-width: 768px)').matches
+  if (newTab) window.open(url, '_blank', 'noopener')
+  else window.location.hash = path + (resume ? '?resume=1' : '?page=1')
 }
-
 export default readerPath

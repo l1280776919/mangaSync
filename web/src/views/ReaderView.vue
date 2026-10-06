@@ -20,7 +20,7 @@
           <span class="rd-origin-tag" title="当前以无损原画画质呈现">原画</span>
         </div>
 
-        <el-select v-model="order" class="rd-chap" size="small" :teleported="true" @change="switchChapter">
+        <el-select :model-value="order" class="rd-chap" size="small" :teleported="true" @change="switchChapter">
           <el-option v-for="ch in chapters" :key="ch.order" :label="chapLabel(ch)" :value="ch.order" />
         </el-select>
 
@@ -74,7 +74,7 @@
       @click="onTap"
     >
       <div class="rd-pages">
-        <div v-for="p in pageList" :key="p" class="rd-item" :data-page="p" :style="itemStyle(p)">
+        <div v-for="p in pageList" :key="kind + comicId + order + ':' + p" class="rd-item" :data-page="p" :style="itemStyle(p)">
           <img
             v-if="shouldRender(p)"
             :src="pageUrl(p)"
@@ -83,7 +83,7 @@
             :loading="p <= 3 ? 'eager' : 'lazy'"
             :class="{ 'is-loaded': loaded[p] }"
             @load="onLoaded(p, $event)"
-            @error="onError(p)"
+            @error="onError(p, $event)"
           />
           <!-- 未加载时的占位（撑住高度，滚动位置不跳） -->
           <div v-if="!loaded[p] && !failed[p]" class="rd-ph"><span>{{ p }}</span></div>
@@ -98,6 +98,8 @@
       <div v-else-if="loadError" class="rd-tip rd-tip-err">
         {{ loadError }}
         <el-button text size="small" @click.stop="load">重试</el-button>
+        <el-button text size="small" @click.stop="router.push('/accounts')">检查源账号</el-button>
+        <el-button text size="small" @click.stop="repairChapter">补下载本章</el-button>
       </div>
 
       <div v-if="meta.pages" class="rd-end">
@@ -117,12 +119,20 @@ import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
 import { useIsMobile } from '@/composables/useIsMobile'
 
+import { auth } from '@/store/auth'
+import { createPreloader } from '@/utils/preloader'
+const preloader = createPreloader()
+let loadController = null
+let disposed = false
+let ready = false
+let readingIdentity = null
+const retryTimers = new Set()
 const route = useRoute()
 const router = useRouter()
 
 const kind = computed(() => String(route.params.kind || ''))
 const comicId = computed(() => String(route.params.comicId || ''))
-const order = ref(Number(route.params.order || 1))
+const order = computed(() => Number(route.params.order || 1))
 
 const title = ref('')
 const chapters = ref([])
@@ -193,7 +203,7 @@ const chapLabel = (ch) => {
 const pageUrl = (p) =>
   `/api/reader/${kind.value}/${encodeURIComponent(comicId.value)}/${order.value}/page/${p}`
 
-const storeKey = computed(() => `ms-reader:${kind.value}:${comicId.value}`)
+const storeKey = computed(() => `ms-reader:${auth.user?.username || "local"}:${kind.value}:${comicId.value}`)
 
 /** 每页占位样式：优先真实尺寸 → 后端尺寸 → 兜底比例 */
 function itemStyle(p) {
@@ -210,9 +220,12 @@ function itemStyle(p) {
   return { aspectRatio: ratio } // 适宽
 }
 
-function saveProgress() {
+function saveProgress(keepalive = false) {
+  if (!ready || disposed || !meta.pages || !readingIdentity) return
+  const progress = { order: readingIdentity.order, page: page.value, title: readingIdentity.title, updatedAt: Date.now() }
+  api.saveReading(readingIdentity.kind, readingIdentity.comicId, progress, keepalive).catch(() => {})
   try {
-    localStorage.setItem(storeKey.value, JSON.stringify({ order: order.value, page: page.value }))
+    localStorage.setItem(readingIdentity.key, JSON.stringify(progress))
   } catch (e) {
     /* 隐私模式下写不了，忽略 */
   }
@@ -228,13 +241,21 @@ function readProgress() {
 
 async function load() {
   const my = ++gen
+  ready = false
+  loadController?.abort()
+  loadController = new AbortController()
+  const signal = loadController.signal
+  preloader.reset()
+  for (const timer of retryTimers) clearTimeout(timer)
+  retryTimers.clear()
+  Object.keys(retriedTimes).forEach(k => delete retriedTimes[k])
+  meta.pages = 0
+  page.value = 1
   loading.value = true
   loadError.value = ''
   Object.keys(failed).forEach((k) => delete failed[k])
   Object.keys(loaded).forEach((k) => delete loaded[k])
   Object.keys(preloading).forEach((k) => delete preloading[k])
-  preloadQueue = []
-  activePreloadCount = 0
   // 上一章测出来的真实尺寸也要清：否则新章节的占位比例会沿用上一章的数字
   Object.keys(natSize).forEach((k) => delete natSize[k])
   sizes.value = []
@@ -242,7 +263,7 @@ async function load() {
     // 本子信息（章节列表）：失败也不阻塞阅读
     if (!chapters.value.length) {
       try {
-        const c = await api.comic(kind.value, comicId.value)
+        const c = await api.comic(kind.value, comicId.value, signal, true)
         if (my !== gen) return // 已经切章，丢弃这次结果
         title.value = c.title || c.comicId
         chapters.value = (c.chapters || []).map((x) => ({ order: x.order, title: x.title }))
@@ -253,7 +274,7 @@ async function load() {
         chapters.value = [{ order: 1, title: '' }]
       }
     }
-    const m = await api.readerMeta(kind.value, comicId.value, order.value)
+    const m = await api.readerMeta(kind.value, comicId.value, order.value, signal)
     if (my !== gen) return // 快速连切章节时，旧响应不能覆盖新章节
     meta.pages = m.pages || 0
     meta.chapterTitle = m.chapterTitle || ''
@@ -263,7 +284,11 @@ async function load() {
     if (!meta.pages) {
       loadError.value = m.error || '这一章拿不到图片'
     } else {
-      nextTick(() => preload(page.value))
+      readingIdentity = { kind: kind.value, comicId: comicId.value, order: order.value, title: title.value, key: storeKey.value }
+      ready = true
+      await nextTick()
+      restorePosition()
+      preload(page.value)
     }
   } catch (e) {
     if (my !== gen) return
@@ -277,10 +302,9 @@ async function load() {
 /** 恢复上次读到哪一页（占位撑开高度后 offsetTop 已可靠，不必久等） */
 function restorePosition() {
   const saved = readProgress()
-  if (!saved || saved.order !== order.value || !saved.page || saved.page <= 1) return
-  nextTick(() => {
-    setTimeout(() => scrollToPage(saved.page, false), 60)
-  })
+  const requested = Number(route.query.page)
+  const target = requested > 0 ? requested : (saved?.order === order.value ? saved.page : 1)
+  scrollToPage(Math.min(meta.pages, Math.max(1, Number(target) || 1)), false)
 }
 
 function scrollToPage(p, smooth = true) {
@@ -325,76 +349,38 @@ function updateCurrentPage() {
  * - 并发控制：最大 2 个后台下载并发，避免拥塞视口正在渲染的当前原画
  * - 有序调度：按离当前页的距离由近及远有序排队
  */
-const PRELOAD_AHEAD = 8
-const PRELOAD_BEHIND = 2
-const MAX_PRELOAD_CONCURRENCY = 2
-let activePreloadCount = 0
-let preloadQueue = []
-
-function processPreloadQueue() {
-  const my = gen
-  while (activePreloadCount < MAX_PRELOAD_CONCURRENCY && preloadQueue.length > 0) {
-    const pageNum = preloadQueue.shift()
-    if (preloading[pageNum] || loaded[pageNum]) continue
-    
-    preloading[pageNum] = true
-    activePreloadCount++
-    
-    const im = new Image()
-    const done = () => {
-      activePreloadCount--
-      im.onload = null
-      im.onerror = null
-      im.src = '' // 及时释放后台 Image 解码句柄，HTTP 响应已安全留存在浏览器缓存
-      processPreloadQueue()
-    }
-    im.onload = () => {
-      if (my === gen) {
-        delete preloading[pageNum]
-        if (im.naturalWidth) natSize[pageNum] = [im.naturalWidth, im.naturalHeight]
-      }
-      done()
-    }
-    im.onerror = () => {
-      if (my === gen) {
-        delete preloading[pageNum]
-      }
-      done()
-    }
-    im.src = pageUrl(pageNum)
-  }
-}
-
 function preload(cur) {
-  if (!meta.pages) return
+  if (!meta.pages || !loaded[cur]) return // Visible page always wins over speculative work.
+  const ahead = navigator.connection?.saveData ? 1 : 4
   const needed = []
-  
-  // 1. 向前预取 1 页（方便回翻）
-  for (let i = cur - 1; i >= Math.max(1, cur - PRELOAD_BEHIND); i--) {
-    if (!loaded[i] && !preloading[i] && !failed[i]) needed.push(i)
+  for (let distance = 1; distance <= ahead; distance++) {
+    for (const p of [cur + distance, cur - distance]) {
+      if (p >= 1 && p <= meta.pages && !loaded[p] && !failed[p]) needed.push(p)
+    }
   }
-  
-  // 2. 向后预取 8 页（按近到远排序）
-  for (let i = cur + 1; i <= Math.min(cur + PRELOAD_AHEAD, meta.pages); i++) {
-    if (!loaded[i] && !preloading[i] && !failed[i]) needed.push(i)
-  }
-  
-  preloadQueue = needed
-  processPreloadQueue()
+  preloader.schedule(needed, pageUrl, (p, w, h) => {
+    if (w && h) natSize[p] = [w, h]
+  })
 }
 
 function onLoaded(p, e) {
+  if (disposed || !ready || !e?.target?.src?.includes(pageUrl(p))) return
   loaded[p] = true
   delete failed[p]
   const im = e?.target
   if (im && im.naturalWidth) natSize[p] = [im.naturalWidth, im.naturalHeight]
+  if (p === page.value) preload(p)
 }
-function onError(p) {
+function onError(p, e) {
+  if (disposed || !ready || !e?.target?.src?.includes(pageUrl(p))) return
   if (!retriedTimes[p]) {
     retriedTimes[p] = 1
-    setTimeout(() => {
-      retry(p)
+    const my = gen
+    const timer = setTimeout(() => {
+      retryTimers.delete(timer)
+      if (my === gen && !disposed) retry(p)
     }, 600)
+    retryTimers.add(timer)
     return
   }
   failed[p] = true
@@ -445,9 +431,19 @@ function applyFit() {
 function switchChapter(next) {
   const n = Number(next)
   if (!n || n < 1 || (chapters.value.length && n > chapters.value.length) || n === order.value) return
+  saveProgress()
   router.replace(`/reader/${kind.value}/${encodeURIComponent(comicId.value)}/${n}`)
 }
 
+async function repairChapter() {
+  try {
+    const accounts = await api.listAccounts()
+    const account = (Array.isArray(accounts) ? accounts : accounts.items || []).find(a => a.kind === kind.value)
+    if (!account) return router.push('/accounts')
+    await api.createDownload({ kind: kind.value, comicId: comicId.value, accountId: account.id, chapters: [order.value], title: title.value })
+    loadError.value = '已加入下载队列，下载完成后点击重试'
+  } catch (_) { /* API provides the actionable error. */ }
+}
 function back() {
   saveProgress()
   if (window.history.length > 1) router.back()
@@ -528,30 +524,45 @@ function onKey(e) {
   }
 }
 
-watch(
-  () => route.params.order,
-  (v) => {
-    const n = Number(v || 1)
-    if (n && n !== order.value) {
-      order.value = n
-      load().then(() => {
-        scroller.value?.scrollTo({ top: 0 })
-        page.value = 1
-      })
-    }
-  }
-)
+watch(() => route.fullPath, () => {
+  chapters.value = []
+  load()
+})
 
+async function initialize() {
+  if (route.query.resume === '1') {
+    let saved = readProgress()
+    try {
+      const remote = await api.reading(kind.value, comicId.value)
+      if (remote && (!saved || remote.updatedAt > (saved.updatedAt || 0))) saved = remote
+    } catch (_) { /* Offline local progress remains available. */ }
+    if (disposed) return
+    const path = `/reader/${kind.value}/${encodeURIComponent(comicId.value)}/${saved?.order || order.value}`
+    await router.replace({ path, query: { page: saved?.page || 1 } })
+  } else await load()
+}
+function onPageHide() { saveProgress(true) }
+function onVisibility() { if (document.hidden) saveProgress(true) }
 onMounted(() => {
   window.addEventListener('keydown', onKey)
-  load().then(restorePosition)
+  window.addEventListener('pagehide', onPageHide)
+  document.addEventListener('visibilitychange', onVisibility)
+  initialize()
+})
+onBeforeUnmount(() => {
+  saveProgress(true)
+  disposed = true
+  gen++
+  loadController?.abort()
+  preloader.reset()
+  clearTimeout(saveTimer)
+  for (const timer of retryTimers) clearTimeout(timer)
+  window.removeEventListener('keydown', onKey)
+  window.removeEventListener('pagehide', onPageHide)
+  document.removeEventListener('visibilitychange', onVisibility)
+  if (rafId) cancelAnimationFrame(rafId)
 })
 
-onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onKey)
-  if (rafId) cancelAnimationFrame(rafId)
-  saveProgress()
-})
 </script>
 
 <style scoped>

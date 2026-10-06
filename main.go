@@ -214,10 +214,21 @@ func main() {
 	srv := api.NewServer(st, cfg, eng)
 	// 阅读器回源缓存按访问时间清理 7 天前的页图（纯派生数据，删掉最多多一次回源）
 	go func() {
-		if n, freed := srv.CleanReaderCache(7 * 24 * time.Hour); n > 0 {
-			log.Printf("阅读器缓存清理：删除 %d 个过期文件，释放 %.1f MB", n, float64(freed)/1024/1024)
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for {
+			srv.CleanReaderCache(7 * 24 * time.Hour)
+			srv.TrimReaderCache(int64(cfg.Get().CacheMaxMB) * 1024 * 1024)
+			st.PruneHistory()
+			st.CleanupSessions()
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
 		}
 	}()
+
 	mux := http.NewServeMux()
 	assets := newStaticAssets()
 	mux.Handle("/api/", srv.Routes())
@@ -437,9 +448,7 @@ func saveLastRun(path, day string) {
 func scheduler(ctx context.Context, cfg *config.Manager, eng *engine.Engine) {
 	statePath := scheduleStatePath(cfg)
 	lastRun := loadLastRun(statePath)
-	if lastRun != "" {
-		log.Printf("定时同步状态：上次同步日 %s", lastRun)
-	}
+	retryAt := time.Time{}
 	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()
 	for {
@@ -447,30 +456,24 @@ func scheduler(ctx context.Context, cfg *config.Manager, eng *engine.Engine) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s := cfg.Get()
-			if !s.Schedule.Enabled || s.Schedule.Time == "" {
-				continue
-			}
-			now := time.Now()
-			hhmm := now.Format("15:04")
-			today := now.Format("2006-01-02")
-			// 字符串比较即可（都是零填充的 HH:MM）；
-			// hhmm >= 设定时刻 覆盖了「已经过了点但今天没跑」的补跑场景
-			if hhmm < s.Schedule.Time || lastRun == today {
-				continue
-			}
-			lastRun = today
-			saveLastRun(statePath, today)
-			log.Printf("定时同步开始（设定 %s，当前 %s）", s.Schedule.Time, hhmm)
-			go func() {
-				c := ctx
-				enq, skip, err := eng.SyncAll(c)
-				if err != nil {
-					log.Printf("定时同步失败: %v", err)
-					return
-				}
-				log.Printf("定时同步完成: 入队 %d，跳过 %d", enq, skip)
-			}()
 		}
+		s := cfg.Get()
+		now := time.Now()
+		today := now.Format("2006-01-02")
+		if !s.Schedule.Enabled || s.Schedule.Time == "" || now.Format("15:04") < s.Schedule.Time || lastRun == today || now.Before(retryAt) {
+			continue
+		}
+		// Synchronous scheduling prevents overlapping attempts. Failed attempts retry after 15 minutes.
+		attempt, cancel := context.WithTimeout(ctx, 30*time.Minute)
+		enq, skip, err := eng.SyncAll(attempt)
+		cancel()
+		if err != nil {
+			retryAt = time.Now().Add(15 * time.Minute)
+			log.Printf("定时同步部分或全部失败，15 分钟后重试: %v", err)
+			continue
+		}
+		lastRun = today
+		saveLastRun(statePath, today)
+		log.Printf("定时同步完成: 入队 %d，跳过 %d", enq, skip)
 	}
 }

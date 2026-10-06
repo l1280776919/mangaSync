@@ -154,3 +154,22 @@
 ## 健康检查
 
 `GET /api/health` → `{"status":"ok","version":"0.1.0","uptimeSec":123}`
+
+## 0.2 新增接口
+
+以下接口均要求后台会话。
+
+| 方法与路径 | 行为 |
+| --- | --- |
+| GET /api/reading | 当前用户最近 20 本阅读记录 |
+| GET /api/reading/{kind}/{comicId} | 当前用户的一本进度，无记录返回 null |
+| PUT /api/reading/{kind}/{comicId} | 保存 `{order,page,title,updatedAt}`，updatedAt 为毫秒时间戳，旧写入不覆盖新记录 |
+| GET /api/sync-history | 最近 50 次账号同步，含 success/partial/failed/running、计数和错误 |
+| GET /api/trash | 可恢复和待恢复的文件回收记录 |
+| POST /api/trash/{id}/restore | 恢复文件与漫画库记录；存在活动任务或目录冲突返回 409 |
+
+`DELETE /api/library/{id}?files=true` 现在移入回收站；活动任务存在时返回 409。不带 files 仍只移除索引。
+
+`GET /api/comics/{kind}/{comicId}?local=1` 在存在本地库目录时优先返回本地章节索引；用于离线阅读入口。
+
+设置新增 `cacheMaxMB`（默认 2048）、`minFreeMB`（默认 512），范围均为 64–1048576 MB。统计新增 `downloadPause` 提示；健康检查新增 `commit`。

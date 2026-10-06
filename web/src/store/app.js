@@ -7,6 +7,7 @@ const STATS_TTL = 15000
 /* 进行中的请求：放模块作用域，不把 Promise 塞进 pinia 变成响应式数据 */
 let accountsInflight = null
 let statsInflight = null
+let activeInflight = null
 let statsAt = 0
 
 export const useAppStore = defineStore('app', {
@@ -94,48 +95,48 @@ export const useAppStore = defineStore('app', {
     },
 
     async loadActiveJobs() {
-      const [running, queued] = await Promise.all([
-        api.listDownloads({ status: 'running', pageSize: 200 }),
-        api.listDownloads({ status: 'queued', pageSize: 200 })
-      ])
-      this.mergeJobs(running?.items || [])
-      this.mergeJobs(queued?.items || [])
-      
-      // 如果没有正在运行的任务，自动退火停止轮询
-      if (!running?.items?.length && !queued?.items?.length && !this._forcePolling) {
-        this.stopPolling()
-      }
+      if (activeInflight) return activeInflight
+      activeInflight = (async () => {
+        const snapshot = {}
+        for (const status of ['running', 'queued']) {
+          let page = 1, total = Infinity
+          while ((page - 1) * 200 < total) {
+            const data = await api.listDownloads({ status, page, pageSize: 200 })
+            for (const j of data?.items || []) snapshot[j.id] = j
+            total = data?.total || 0
+            page++
+          }
+        }
+        this.jobs = snapshot
+        this.jobTick++
+      })().finally(() => { activeInflight = null })
+      return activeInflight
     },
 
-    /** 仅在需要时按需短轮询（如任务页或有后台下载任务时） */
-    startPolling(interval = 3500, force = false) {
-      if (force) this._forcePolling = true
-      if (this._pollTimer) return
+    startPolling() {
+      if (this.polling) return
       this.polling = true
+      const epoch = this._pollEpoch = (this._pollEpoch || 0) + 1
       const tick = async () => {
         try {
-          await this.loadActiveJobs()
-        } catch (_) {
-          /* 静默失败 */
-        }
+          if (!document.hidden) await this.loadActiveJobs()
+        } catch (_) { /* next tick retries */ }
+        if (this.polling && this._pollEpoch === epoch) this._pollTimer = setTimeout(tick, this.runningJobs.length ? 3500 : 15000)
       }
       tick()
-      this._pollTimer = setInterval(tick, interval)
     },
 
     stopPolling() {
-      this._forcePolling = false
-      if (this._pollTimer) {
-        clearInterval(this._pollTimer)
-        this._pollTimer = null
-      }
       this.polling = false
+      this._pollEpoch = (this._pollEpoch || 0) + 1
+      clearTimeout(this._pollTimer)
+      this._pollTimer = null
     },
 
     // 兼容旧调用接口
     startEvents() {
       // 不再发起 EventSource 长连接，释放 HTTP 连接池
-      this.loadActiveJobs().catch(() => {})
+      this.startPolling()
     },
 
     stopEvents() {

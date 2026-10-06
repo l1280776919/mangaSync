@@ -39,13 +39,13 @@ const statusOptions = [
   ...Object.entries(JOB_STATUS).map(([value, v]) => ({ value, label: v.label }))
 ]
 
-/** 进行中的任务：优先用 SSE 实时缓冲里的数据（比接口轮询更实时） */
+/** 活动任务快照只补充非终态记录，已完成/失败结果以列表接口为准 */
 const liveItems = computed(() => {
   const map = new Map()
   for (const j of items.value) map.set(j.id, j)
-  // SSE 推来的任务对象覆盖同 id 的记录（实时进度更准）
+  // 活动快照更新同 id 的进行中记录
   for (const j of store.jobList) {
-    if (map.has(j.id)) map.set(j.id, { ...map.get(j.id), ...j })
+    if (map.has(j.id) && ['queued', 'running'].includes(map.get(j.id).status)) map.set(j.id, { ...map.get(j.id), ...j })
   }
   return [...map.values()].sort((a, b) => (b.id || 0) - (a.id || 0))
 })
@@ -71,7 +71,7 @@ async function load() {
     items.value = []
     total.value = 0
   } finally {
-    req.end()
+    req.end(my)
     if (req.isCurrent(my)) loading.value = false
   }
 }
@@ -146,7 +146,7 @@ const active = useViewActive({
   }
 })
 
-// SSE 推送到达时，如果当前看的是实时状态（或全部），做节流刷新列表补齐总数
+// 活动快照更新时，如果当前看的是实时状态（或全部），做节流刷新列表补齐总数
 let refreshTimer = null
 watch(
   () => store.jobTick,

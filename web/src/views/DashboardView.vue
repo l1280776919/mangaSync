@@ -3,6 +3,7 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import api from '@/api'
+import { openReaderWindow } from '@/utils/reader'
 import { useAppStore } from '@/store/app'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { useViewActive } from '@/composables/useViewActive'
@@ -22,6 +23,8 @@ const isMobile = useIsMobile()
 const stats = computed(() => store.stats)
 const loadingStats = ref(false)
 const recentDone = ref([])
+const reading = ref([])
+const syncRuns = ref([])
 const loadingRecent = ref(false)
 const logVisible = ref(false)
 const logJob = ref(null)
@@ -98,8 +101,13 @@ function openLogs(job) {
   logVisible.value = true
 }
 
+async function loadActivity() {
+  const [r, s] = await Promise.allSettled([api.recentReading(), api.syncHistory()])
+  if (r.status === 'fulfilled') reading.value = r.value || []
+  if (s.status === 'fulfilled') syncRuns.value = s.value || []
+}
 async function reload(force = false) {
-  await Promise.allSettled([loadStats(force), loadRecent(), store.loadActiveJobs()])
+  await Promise.allSettled([loadStats(force), loadRecent(), store.loadActiveJobs(), loadActivity()])
 }
 
 let tickTimer = null
@@ -115,6 +123,7 @@ watch(
       if (!active.value) return
       loadStats(true)
       loadRecent()
+      loadActivity()
     }, 1200)
   }
 )
@@ -165,17 +174,27 @@ const shortcuts = [
 
 <template>
   <div>
+    <el-alert v-if="stats?.downloadPause" :title="stats.downloadPause" type="warning" :closable="false" />
+    <div class="ms-panel">
+      <div class="ms-panel-title">继续阅读</div>
+      <div v-if="!reading.length" class="ms-empty">开始阅读后，这里会保存你的阅读位置。</div>
+      <div v-for="book in reading" :key="book.kind + book.comicId" class="reading-row">
+        <img :src="api.coverUrl(book.kind, book.comicId)" alt="" loading="lazy" />
+        <div class="reading-info"><strong>{{ book.title || book.comicId }}</strong><div class="ms-dim">第 {{ book.order }} 章 · 第 {{ book.page }} 页</div></div>
+        <el-button type="primary" @click="openReaderWindow(book)">继续阅读</el-button>
+        <el-button text @click="openReaderWindow(book, 1, '', false)">从头阅读</el-button>
+      </div>
+    </div>
     <div class="ms-panel">
       <div class="ms-panel-title">
         <span>
           总览
-          <span class="ms-sub">· 后端 /api/stats</span>
+
         </span>
         <div class="title-actions">
-          <el-tag v-if="store.sseConnected" type="success" size="small" effect="light">实时推送中</el-tag>
-          <el-tag v-else type="warning" size="small" effect="light">SSE 断开（已降级轮询）</el-tag>
+          <el-tag size="small" effect="light">{{ store.polling ? '自动刷新中' : '刷新已暂停' }}</el-tag>
           <el-button size="small" :loading="loadingStats" @click="reload(true)">刷新数据</el-button>
-          <el-button size="small" text type="primary" @click="store.reconnectEvents()">重连推送</el-button>
+
         </div>
       </div>
 
@@ -209,7 +228,7 @@ const shortcuts = [
       <div class="ms-panel-title">
         <span>
           正在下载
-          <span class="ms-sub">· 来自 /api/events 实时推送</span>
+
         </span>
         <span class="ms-dim">{{ activeJobs.length }} 个任务</span>
       </div>
@@ -334,11 +353,27 @@ const shortcuts = [
       </div>
     </div>
 
+    <div class="ms-panel">
+      <div class="ms-panel-title"><span>同步历史</span><span class="ms-dim">失败的定时同步将在 15 分钟后重试</span></div>
+      <div v-if="!syncRuns.length" class="ms-empty">还没有同步记录</div>
+      <div v-for="run in syncRuns.slice(0, 10)" :key="run.id" class="sync-row">
+        <strong>{{ store.accountMap[run.accountId]?.label || store.accountMap[run.accountId]?.username || ('账号 ' + run.accountId) }}</strong>
+        <el-tag :type="run.status === 'success' ? 'success' : run.status === 'running' ? 'info' : 'warning'">{{ ({success:'成功',partial:'部分成功',failed:'失败',running:'进行中'})[run.status] }}</el-tag>
+        <span>入队 {{ run.enqueued }} · 跳过 {{ run.skipped }} · {{ fromNow(run.startedAt) }}</span>
+        <div v-if="run.error" class="sync-error">{{ run.error }}</div>
+      </div>
+    </div>
     <LogDialog v-model="logVisible" :job="logJob" />
   </div>
 </template>
 
 <style scoped>
+.reading-row { display: flex; gap: 12px; align-items: center; padding: 12px 0; flex-wrap: wrap; border-bottom: 1px solid var(--ms-border); }
+.reading-row img { width: 44px; height: 60px; object-fit: cover; border-radius: 4px; }
+.reading-info { flex: 1; min-width: 120px; }
+.sync-row { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--ms-border); }
+.sync-error { width: 100%; color: var(--el-color-warning); overflow-wrap: anywhere; }
+
 .title-actions {
   display: flex;
   align-items: center;

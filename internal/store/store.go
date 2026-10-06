@@ -88,6 +88,10 @@ func Open(dir string) (*Store, error) {
 	if err := s.migrate(); err != nil {
 		return nil, err
 	}
+	if err := s.migrateFeatures(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	// 库里存着漫画站明文密码与 30 天会话 token，必须比 config.json 更严：0600
 	chmodPrivate(dbPath)
 	return s, nil
@@ -275,16 +279,7 @@ func (s *Store) TouchSync(id int64) error {
 
 // ---------------- jobs ----------------
 
-func (s *Store) CreateJob(j *Job) (int64, error) {
-	ch, _ := json.Marshal(j.Chapters)
-	j.CreatedAt = now()
-	res, err := s.db.Exec(`insert into jobs(kind,account_id,comic_id,title,chapters,status,created_at)
-		values(?,?,?,?,?,?,?)`, j.Kind, j.AccountID, j.ComicID, j.Title, string(ch), "queued", j.CreatedAt)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
-}
+func (s *Store) CreateJob(j *Job) (int64, error) { return s.enqueue(j) }
 
 func (s *Store) scanJob(scan func(dest ...any) error) (*Job, error) {
 	j := &Job{}
@@ -383,7 +378,7 @@ func (s *Store) SetJobPath(id int64, path string) error {
 
 func (s *Store) RequeueJob(id int64) error {
 	_, err := s.db.Exec(`update jobs set status='queued',error='',finished_at='',started_at='',speed_bps=0,
-		chapters_done=0,images_done=0 where id=?`, id)
+		chapters_done=0,images_done=0 where id=? and status in ('done','failed','canceled')`, id)
 	return err
 }
 
