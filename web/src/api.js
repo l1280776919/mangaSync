@@ -59,8 +59,10 @@ export function authErrorMessage(e) {
   return e?.message || '请求失败'
 }
 
-async function request(path, { method = 'GET', body, query, silent = false, raw = false, signal } = {}) {
+async function request(path, { method = 'GET', body, query, silent = false, raw = false, signal, keepalive = false, timeout = 30000 } = {}) {
   const url = `${BASE}${path}${buildQuery(query)}`
+  const deadline = AbortSignal.timeout(timeout)
+  signal = signal ? AbortSignal.any([signal, deadline]) : deadline
   let res
   try {
     res = await fetch(url, {
@@ -68,7 +70,7 @@ async function request(path, { method = 'GET', body, query, silent = false, raw 
       credentials: 'same-origin', // 带上 ms_session cookie
       headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal
+      signal, keepalive
     })
   } catch (e) {
     if (e && e.name === 'AbortError') throw e
@@ -164,10 +166,10 @@ export const api = {
   updateAccount: (id, patch) => request(`/accounts/${id}`, { method: 'PATCH', body: patch }),
   deleteAccount: (id) => request(`/accounts/${id}`, { method: 'DELETE' }),
   loginAccount: (id) => request(`/accounts/${id}/login`, { method: 'POST' }),
-  syncAccount: (id) => request(`/accounts/${id}/sync`, { method: 'POST' }),
+  syncAccount: (id) => request(`/accounts/${id}/sync`, { method: 'POST', timeout: 125000 }),
 
   // 收藏
-  favorites: (accountId, { keyword, page = 1, pageSize = 20, signal } = {}) =>
+  favorites: (accountId, { keyword, page = 1, pageSize = 20, signal, keepalive = false, timeout = 30000 } = {}) =>
     request(`/accounts/${accountId}/favorites`, { query: { keyword, page, pageSize }, signal }),
   addFavorite: (accountId, comicId) =>
     request(`/accounts/${accountId}/favorites`, { method: 'POST', body: { comicId } }),
@@ -175,20 +177,26 @@ export const api = {
     request(`/accounts/${accountId}/favorites/${encodeURIComponent(comicId)}`, { method: 'DELETE' }),
 
   // 在线阅读
-  readerMeta: (kind, comicId, order) =>
-    request(`/reader/${kind}/${encodeURIComponent(comicId)}/${order}/meta`, { silent: true }),
+  readerMeta: (kind, comicId, order, signal) =>
+    request(`/reader/${kind}/${encodeURIComponent(comicId)}/${order}/meta`, { silent: true, signal }),
 
+  reading: (kind, comicId) => request(`/reading/${kind}/${encodeURIComponent(comicId)}`, { silent: true }),
+  recentReading: () => request('/reading', { silent: true }),
+  saveReading: (kind, comicId, body, keepalive = false) => request(`/reading/${kind}/${encodeURIComponent(comicId)}`, { method: 'PUT', body, silent: true, keepalive }),
+  syncHistory: () => request('/sync-history', { silent: true }),
+  trash: () => request('/trash'),
+  restoreTrash: (id) => request(`/trash/${id}/restore`, { method: 'POST' }),
   // 漫画
-  comic: (kind, comicId) =>
-    request(`/comics/${kind}/${encodeURIComponent(comicId)}`),
+  comic: (kind, comicId, signal, local = false) =>
+    request(`/comics/${kind}/${encodeURIComponent(comicId)}`, { signal, query: local ? { local: 1 } : undefined }),
   coverUrl: (kind, comicId) => `${BASE}/comics/${kind}/${encodeURIComponent(comicId)}/cover`,
 
   // 搜索
-  search: ({ kind, keyword, page = 1, pageSize = 20, accountId, sort, signal } = {}) =>
+  search: ({ kind, keyword, page = 1, pageSize = 20, accountId, sort, signal, keepalive = false, timeout = 30000 } = {}) =>
     request('/search', { query: { kind, keyword, page, pageSize, accountId, sort }, signal }),
 
   // 下载任务
-  listDownloads: ({ status, page = 1, pageSize = 20, signal } = {}) =>
+  listDownloads: ({ status, page = 1, pageSize = 20, signal, keepalive = false, timeout = 30000 } = {}) =>
     request('/downloads', { query: { status, page, pageSize }, signal }),
   createDownload: ({ kind, accountId, comicId, title, chapters, all }) =>
     request('/downloads', { method: 'POST', body: { kind, accountId, comicId, title, chapters, all } }),
@@ -198,11 +206,11 @@ export const api = {
   downloadLogs: (id) => request(`/downloads/${id}/logs`, { silent: true }),
 
   // 漫画库
-  library: ({ kind, keyword, page = 1, pageSize = 20, sort, signal } = {}) =>
+  library: ({ kind, keyword, page = 1, pageSize = 20, sort, signal, keepalive = false, timeout = 30000 } = {}) =>
     request('/library', { query: { kind, keyword, page, pageSize, sort }, signal }),
   deleteLibrary: (id, files = false) =>
     request(`/library/${id}`, { method: 'DELETE', query: { files } }),
-  scanLibrary: () => request('/library/scan', { method: 'POST' })
+  scanLibrary: () => request('/library/scan', { method: 'POST', timeout: 300000 })
 }
 
 export default api

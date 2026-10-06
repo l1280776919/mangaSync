@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	_ "golang.org/x/image/webp"
 
@@ -116,23 +118,31 @@ func (s *Server) readerPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// 阅读全面采用原画画质（preview 传 false，开启无损还原）
-	b, ct, err := src.PageImage(r.Context(), s.bestCred(acc, kind), comicID, order, page, false)
-	if err != nil {
-		writeErr(w, 404, "取图失败: %v", err)
-		return
-	}
-	if len(b) == 0 {
-		writeErr(w, 404, "取到空图")
-		return
-	}
-	// 落缓存（失败不影响返回）
-	if err := os.MkdirAll(cacheDir, 0o755); err == nil {
-		cachePath := filepath.Join(cacheDir, fmt.Sprintf("%05d%s", page, extByContentType(ct)))
-		if werr := os.WriteFile(cachePath, b, 0o644); werr != nil {
-			// 缓存写不进去就算了，不影响阅读
-			_ = werr
+	cred := s.bestCred(acc, kind)
+	key := fmt.Sprintf("%s/%s/%d/%d/%d", kind, comicID, order, page, cred.AccountID)
+	b, ct, err := s.fetchPage(r.Context(), key, func(ctx context.Context) ([]byte, string, error) {
+		// A previous flight may have populated the cache after this request's first check.
+		for _, ext := range []string{"webp", "jpg", "png", "gif"} {
+			p := filepath.Join(cacheDir, fmt.Sprintf("%05d.%s", page, ext))
+			if data, e := os.ReadFile(p); e == nil && len(data) > 0 {
+				return data, contentTypeByExt(p), nil
+			}
 		}
+		b, ct, err := src.PageImage(ctx, cred, comicID, order, page, false)
+		if err != nil {
+			return nil, "", err
+		}
+		if len(b) == 0 {
+			return nil, "", fmt.Errorf("取到空图")
+		}
+		_ = atomicCache(filepath.Join(cacheDir, fmt.Sprintf("%05d%s", page, extByContentType(ct))), b)
+		return b, ct, nil
+	})
+	if err != nil {
+		writeErr(w, 502, "取图失败，请重试或检查源账号: %v", err)
+		return
 	}
+
 	serveReaderImage(w, b, ct)
 }
 
@@ -147,6 +157,7 @@ func (s *Server) readerPage(w http.ResponseWriter, r *http.Request) {
 func serveCachedFile(w http.ResponseWriter, r *http.Request, path string, fi os.FileInfo) {
 	w.Header().Set("Cache-Control", "private, no-cache")
 	w.Header().Set("ETag", fmt.Sprintf(`"%x-%x"`, fi.Size(), fi.ModTime().UnixNano()))
+	_ = os.Chtimes(path, time.Now(), fi.ModTime())
 	http.ServeFile(w, r, path)
 }
 

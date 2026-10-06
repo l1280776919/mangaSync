@@ -20,6 +20,8 @@ const loading = ref(false)
 const saving = ref(false)
 const formRef = ref(null)
 const health = ref(null)
+const newTab = ref(localStorage.getItem('ms-reader-new-tab') !== '0')
+watch(newTab, v => localStorage.setItem('ms-reader-new-tab', v ? '1' : '0'))
 
 /** 契约里 settings 的全部字段 */
 const form = reactive({
@@ -32,6 +34,7 @@ const form = reactive({
   imageWorkers: 8,
   quality: 'original',
   schedule: { enabled: false, time: '04:30' },
+  cacheMaxMB: 2048, minFreeMB: 512,
   serverPort: 8787
 })
 
@@ -52,7 +55,7 @@ const rules = {
     {
       validator(rule, value, cb) {
         const n = Number(value)
-        if (!Number.isInteger(n) || n < 1 || n > 64) cb(new Error('图片并发数建议 1 ～ 64'))
+        if (!Number.isInteger(n) || n < 1 || n > 32) cb(new Error('图片并发数建议 1 ～ 32'))
         else cb()
       },
       trigger: 'blur'
@@ -172,6 +175,7 @@ async function load() {
         enabled: !!s?.schedule?.enabled,
         time: s?.schedule?.time || '04:30'
       },
+      cacheMaxMB: s?.cacheMaxMB ?? 2048, minFreeMB: s?.minFreeMB ?? 512,
       serverPort: s?.serverPort ?? 8787
     })
     store.settings = s
@@ -206,6 +210,7 @@ async function save() {
         imageWorkers: Number(form.imageWorkers),
         quality: form.quality,
         schedule: { enabled: !!form.schedule.enabled, time: form.schedule.time },
+        cacheMaxMB: Number(form.cacheMaxMB), minFreeMB: Number(form.minFreeMB),
         serverPort: Number(form.serverPort)
       }
       const merged = await api.saveSettings(payload)
@@ -363,6 +368,9 @@ watch(
     >
       <el-divider content-position="left">下载路径</el-divider>
 
+      <el-form-item label="阅读缓存上限 (MB)"><el-input-number v-model="form.cacheMaxMB" :min="64" :max="1048576" /></el-form-item>
+      <el-form-item label="磁盘预留 (MB)"><el-input-number v-model="form.minFreeMB" :min="64" :max="1048576" /><div class="tip">空间不足时暂停下载，释放空间后自动继续。</div></el-form-item>
+      <el-form-item label="桌面新标签阅读"><el-switch v-model="newTab" /><div class="tip">手机始终在当前页面打开。</div></el-form-item>
       <el-form-item label="下载根目录" prop="downloadRoot">
         <el-input v-model="form.downloadRoot" placeholder="/data/comics">
           <template #prepend><el-icon><FolderOpened /></el-icon></template>

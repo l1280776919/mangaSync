@@ -82,7 +82,7 @@ async function load() {
     items.value = []
     total.value = 0
   } finally {
-    req.end()
+    req.end(my)
     if (req.isCurrent(my)) loading.value = false
   }
 }

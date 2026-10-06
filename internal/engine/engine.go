@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,6 +33,8 @@ type Engine struct {
 	srcKeys map[string]string
 
 	scanMu sync.Mutex
+	opMu   sync.Mutex
+	syncMu sync.Mutex
 }
 
 func New(st *store.Store, cfg *config.Manager) *Engine {
@@ -136,10 +139,12 @@ func (e *Engine) Relogin(ctx context.Context, a *store.Account) (*source.Cred, e
 // ---------------- 任务队列 ----------------
 
 func (e *Engine) Enqueue(job *store.Job) (int64, error) {
-	// 去重：同 kind+comic_id 已在排队/运行则直接复用，避免同一本漫画并发两个任务
-	// （哔咔的 .part 临时目录是按章节名固定的，重复任务会互删互踩）
-	if id, err := e.st.ActiveJobID(job.Kind, job.ComicID); err == nil && id > 0 {
-		return id, nil
+	e.opMu.Lock()
+	defer e.opMu.Unlock()
+	if blocked, err := e.st.InTrash(job.Kind, job.ComicID); err != nil {
+		return 0, err
+	} else if blocked {
+		return 0, fmt.Errorf("漫画在回收站，请先恢复")
 	}
 	id, err := e.st.CreateJob(job)
 	if err != nil {
@@ -151,6 +156,8 @@ func (e *Engine) Enqueue(job *store.Job) (int64, error) {
 }
 
 func (e *Engine) Cancel(id int64) error {
+	e.opMu.Lock()
+	defer e.opMu.Unlock()
 	e.mu.Lock()
 	cancel, ok := e.running[id]
 	e.mu.Unlock()
@@ -163,18 +170,30 @@ func (e *Engine) Cancel(id int64) error {
 		return err
 	}
 	if j.Status == "queued" {
-		return e.st.SetJobStatus(id, "canceled", "手动取消")
+		return e.st.CancelQueued(id)
 	}
 	return fmt.Errorf("任务不在运行中")
 }
 
 func (e *Engine) Retry(id int64) error {
+	e.opMu.Lock()
+	defer e.opMu.Unlock()
 	j, err := e.st.GetJob(id)
 	if err != nil {
 		return err
 	}
 	if j.Status == "running" {
 		return fmt.Errorf("任务正在运行")
+	}
+	if active, err := e.st.ActiveJobID(j.Kind, j.ComicID); err != nil {
+		return err
+	} else if active > 0 {
+		return fmt.Errorf("已存在活动任务 #%d", active)
+	}
+	if blocked, err := e.st.InTrash(j.Kind, j.ComicID); err != nil {
+		return err
+	} else if blocked {
+		return fmt.Errorf("漫画在回收站，请先恢复")
 	}
 	return e.st.RequeueJob(id)
 }
@@ -196,6 +215,11 @@ func (e *Engine) Start(ctx context.Context) {
 }
 
 func (e *Engine) dispatch(ctx context.Context) {
+	e.opMu.Lock()
+	defer e.opMu.Unlock()
+	if e.DownloadStatus() != "" {
+		return
+	}
 	s := e.cfg.Get()
 	for {
 		e.mu.Lock()
@@ -213,7 +237,7 @@ func (e *Engine) dispatch(ctx context.Context) {
 		e.running[j.ID] = cancel
 		e.mu.Unlock()
 		// 立刻置为 running，防止下一轮 dispatch 重复取到同一个任务
-		if err := e.st.SetJobStatus(j.ID, "running", ""); err != nil {
+		if ok, err := e.st.ClaimJob(j.ID); err != nil || !ok {
 			e.mu.Lock()
 			delete(e.running, j.ID)
 			e.mu.Unlock()
@@ -226,12 +250,14 @@ func (e *Engine) dispatch(ctx context.Context) {
 				delete(e.running, job.ID)
 				e.mu.Unlock()
 			}()
+			defer cancel()
 			e.runJob(jctx, job)
 		}(j)
 	}
 }
 
 func (e *Engine) runJob(ctx context.Context, j *store.Job) {
+	ctx = source.WithDownloadGuard(ctx, e.waitDownload)
 	if j.Title == "" {
 		if src, err := e.SourceFor(j.Kind); err == nil {
 			if d, err := src.Detail(ctx, e.Cred(&store.Account{Kind: j.Kind}), j.ComicID); err == nil {
@@ -267,6 +293,9 @@ func (e *Engine) runJob(ctx context.Context, j *store.Job) {
 		JobID: j.ID,
 		Log:   func(level, msg string) { e.log(j.ID, level, msg) },
 		Chapter: func(cs source.ChapterState) {
+			if cs.State == "done" {
+				_ = e.st.SaveChapter(j.Kind, j.ComicID, store.ChapterCheck{Order: cs.Order, Images: cs.Images, Path: cs.Path})
+			}
 			if cs.Err != "" {
 				e.log(j.ID, "error", fmt.Sprintf("章节 %d %s: %s", cs.Order, cs.Title, cs.Err))
 			}
@@ -292,6 +321,12 @@ func (e *Engine) runJob(ctx context.Context, j *store.Job) {
 
 	dst := e.SourceDir(j.Kind)
 	res, dlErr := src.Download(ctx, cred, j.ComicID, j.Chapters, dst, h)
+	if errors.Is(dlErr, source.ErrAuth) {
+		if fresh, err := e.Relogin(ctx, acc); err == nil {
+			cred = fresh
+			res, dlErr = src.Download(ctx, cred, j.ComicID, j.Chapters, dst, h)
+		}
+	}
 
 	// 统计落盘结果（无论成功失败都刷新一下本地库）
 	if res != nil && res.Path != "" {
@@ -324,10 +359,15 @@ func (e *Engine) runJob(ctx context.Context, j *store.Job) {
 		_ = e.st.UpsertComic(&store.Comic{
 			Kind: j.Kind, ComicID: j.ComicID, Title: title, Path: res.Path,
 			Chapters: chapters, ChaptersDone: chaptersDone, Images: imgs, Bytes: bytes,
-			Complete: chapters == 0 || chaptersDone >= chapters, Source: "download",
+			Complete: false, Source: "download",
 		})
 	}
 
+	if ctx.Err() == nil {
+		if _, err := e.verifyComic(ctx, src, cred, j.ComicID); err != nil && dlErr == nil {
+			dlErr = fmt.Errorf("下载后校验失败: %w", err)
+		}
+	}
 	switch {
 	case ctx.Err() != nil:
 		_ = e.st.SetJobStatus(j.ID, "canceled", "已取消")
@@ -407,7 +447,22 @@ func (e *Engine) Broadcast(name string, payload any) { e.broadcastEvent(name, pa
 // ---------------- 收藏同步入队 ----------------
 
 // SyncAccount 把某账号的收藏里「没下完/有更新」的入队，返回 (入队数, 跳过数)
-func (e *Engine) SyncAccount(ctx context.Context, accID int64) (int, int, error) {
+func (e *Engine) SyncAccount(ctx context.Context, accID int64) (enq, skip int, resultErr error) {
+	e.syncMu.Lock()
+	defer e.syncMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return 0, 0, err
+	}
+	runID, err := e.st.StartSync(accID)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() {
+		if err := e.st.FinishSync(runID, enq, skip, resultErr); err != nil {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
+
 	acc, err := e.st.GetAccount(accID)
 	if err != nil {
 		return 0, 0, err
@@ -432,6 +487,7 @@ func (e *Engine) SyncAccount(ctx context.Context, accID int64) (int, int, error)
 			if cred2, e2 := e.Relogin(ctx, acc); e2 == nil {
 				if f2, e3 := src.Favorites(ctx, cred2); len(f2) > 0 || e3 == nil {
 					favs, err = f2, e3
+					cred = cred2
 				}
 			}
 		}
@@ -442,22 +498,48 @@ func (e *Engine) SyncAccount(ctx context.Context, accID int64) (int, int, error)
 		// 让调用方提示「部分同步」，而不是像以前那样要么整单失败、要么静默当成功
 		partialErr = err
 	}
-	enq, skip := 0, 0
 	for _, c := range favs {
-		rec, _ := e.st.GetComic(acc.Kind, c.ComicID)
-		if rec != nil && rec.Complete && rec.Images > 0 {
-			if p := rec.Path; p != "" {
-				if n, _ := dirStats(p); n >= rec.Images {
-					skip++
-					continue
-				}
+		if err := ctx.Err(); err != nil {
+			partialErr = errors.Join(partialErr, err)
+			break
+		}
+		if blocked, err := e.st.InTrash(acc.Kind, c.ComicID); err != nil {
+			partialErr = errors.Join(partialErr, err)
+			continue
+		} else if blocked {
+			skip++
+			continue
+		}
+		missing, err := e.verifyComic(ctx, src, cred, c.ComicID)
+		if errors.Is(err, source.ErrAuth) {
+			if cred, err = e.Relogin(ctx, acc); err == nil {
+				missing, err = e.verifyComic(ctx, src, cred, c.ComicID)
 			}
 		}
-		if _, err := e.Enqueue(&store.Job{Kind: acc.Kind, AccountID: acc.ID, ComicID: c.ComicID, Title: c.Title}); err != nil {
+		if err != nil {
+			partialErr = errors.Join(partialErr, fmt.Errorf("%s: %w", c.Title, err))
+			continue
+		}
+		if len(missing) == 0 {
+			skip++
+			continue
+		}
+		active, err := e.st.ActiveJobID(acc.Kind, c.ComicID)
+		if err != nil {
+			partialErr = errors.Join(partialErr, err)
+			continue
+		}
+		if active > 0 {
+			skip++
+			continue
+		}
+		if _, err = e.Enqueue(&store.Job{Kind: acc.Kind, AccountID: acc.ID, ComicID: c.ComicID, Title: c.Title, Chapters: missing}); err != nil {
+			partialErr = errors.Join(partialErr, err)
 			continue
 		}
 		enq++
 	}
+
 	_ = e.st.TouchSync(acc.ID)
 	return enq, skip, partialErr
 }
@@ -469,14 +551,20 @@ func (e *Engine) SyncAll(ctx context.Context) (int, int, error) {
 		return 0, 0, err
 	}
 	enq, skip := 0, 0
+	var failures []error
 	for _, a := range accounts {
 		en, sk, err := e.SyncAccount(ctx, a.ID)
+		enq += en
+		skip += sk
 		if err != nil {
+			failures = append(failures, fmt.Errorf("账号 %d: %w", a.ID, err))
 			e.Broadcast("notice", map[string]any{"level": "error", "msg": fmt.Sprintf("账号 %s 同步失败: %v", a.Username, err)})
 			continue
 		}
-		enq += en
-		skip += sk
+
+	}
+	if err := errors.Join(failures...); err != nil {
+		return enq, skip, err
 	}
 	e.Broadcast("notice", map[string]any{"level": "info",
 		"msg": fmt.Sprintf("定时同步完成: 入队 %d，跳过 %d", enq, skip)})
@@ -487,6 +575,8 @@ func (e *Engine) SyncAll(ctx context.Context) (int, int, error) {
 
 // ScanLibrary 扫描两个源的下载目录，把磁盘上的漫画补进库
 func (e *Engine) ScanLibrary() (found, added int, err error) {
+	e.opMu.Lock()
+	defer e.opMu.Unlock()
 	e.scanMu.Lock()
 	defer e.scanMu.Unlock()
 	for _, kind := range []string{"pica", "jm"} {
@@ -522,6 +612,12 @@ func (e *Engine) ScanLibrary() (found, added int, err error) {
 					comicID = "dir:" + ent.Name()
 				}
 			}
+			if active, _ := e.st.ActiveJobID(kind, comicID); active > 0 {
+				continue
+			}
+			if blocked, _ := e.st.InTrash(kind, comicID); blocked {
+				continue
+			}
 			if rec, _ := e.st.GetComic(kind, comicID); rec == nil {
 				added++
 			}
@@ -531,7 +627,22 @@ func (e *Engine) ScanLibrary() (found, added int, err error) {
 				// 单章本：图片直接放在本子目录里
 				chapters, chaptersDone = 1, 1
 			}
-			complete := chapters == 0 || chaptersDone >= chapters
+			complete := false
+			if old, _ := e.st.GetComic(kind, comicID); old != nil {
+				chapters = old.Chapters
+			}
+			checks, _ := e.st.Chapters(kind, comicID)
+			chaptersDone = 0
+			for _, check := range checks {
+				if check.Order <= chapters && check.Images > 0 && pageCount(check.Path) == check.Images {
+					chaptersDone++
+				}
+			}
+			complete = chapters > 0 && chaptersDone >= chapters
+			if len(checks) == 0 {
+				chaptersDone = 0
+			}
+
 			_ = e.st.UpsertComic(&store.Comic{
 				Kind: kind, ComicID: comicID, Title: title, Path: dir,
 				Chapters: chapters, ChaptersDone: chaptersDone, Images: imgs, Bytes: bytes,

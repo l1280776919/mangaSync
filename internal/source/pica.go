@@ -83,7 +83,7 @@ func newHTTPClient(proxy string, timeout time.Duration) *http.Client {
 			tr.Proxy = http.ProxyURL(u)
 		}
 	}
-	return &http.Client{Timeout: timeout, Transport: tr}
+	return &http.Client{Timeout: timeout, Transport: priorityTransport{base: tr}}
 }
 
 func (p *Pica) Kind() string { return "pica" }
@@ -535,6 +535,9 @@ type picaPageDoc struct {
 
 // fetchImage 下载单张图片并校验确实是图片
 func (p *Pica) fetchImage(ctx context.Context, u string, _ string, _ string) ([]byte, string, error) {
+	if err := waitDownload(ctx); err != nil {
+		return nil, "", err
+	}
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -1019,19 +1022,26 @@ func dirImageStats(dir string) (int, int64) {
 	if err != nil {
 		return 0, 0
 	}
-	n, b := 0, int64(0)
+	pages := map[int]bool{}
+	var bytes int64
 	for _, e := range entries {
-		if e.IsDir() {
+		if e.IsDir() || !imgExts[strings.ToLower(filepath.Ext(e.Name()))] {
 			continue
 		}
-		if imgExts[strings.ToLower(filepath.Ext(e.Name()))] {
-			n++
-			if fi, err := e.Info(); err == nil {
-				b += fi.Size()
-			}
+		n, err := strconv.Atoi(strings.TrimSuffix(e.Name(), filepath.Ext(e.Name())))
+		if err != nil || n < 1 {
+			continue
+		}
+		if fi, err := e.Info(); err == nil && fi.Size() > 0 {
+			pages[n] = true
+			bytes += fi.Size()
 		}
 	}
-	return n, b
+	n := 0
+	for pages[n+1] {
+		n++
+	}
+	return n, bytes
 }
 
 func isImage(b []byte) bool {

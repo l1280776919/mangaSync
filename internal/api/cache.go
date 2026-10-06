@@ -65,3 +65,37 @@ func pruneEmptyDirs(root string) {
 		_ = os.Remove(d)
 	}
 }
+
+// Enforce capacity as well as age; explicit access timestamps work on noatime NAS mounts.
+func (s *Server) TrimReaderCache(maxBytes int64) (freed int64) {
+	root := filepath.Join(s.base, "reader")
+	type entry struct {
+		path string
+		size int64
+		at   time.Time
+	}
+	var entries []entry
+	var total int64
+	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if fi, e := d.Info(); e == nil {
+			entries = append(entries, entry{p, fi.Size(), lastAccess(fi)})
+			total += fi.Size()
+		}
+		return nil
+	})
+	sort.Slice(entries, func(i, j int) bool { return entries[i].at.Before(entries[j].at) })
+	for _, e := range entries {
+		if total <= maxBytes {
+			break
+		}
+		if os.Remove(e.path) == nil {
+			total -= e.size
+			freed += e.size
+		}
+	}
+	pruneEmptyDirs(root)
+	return
+}

@@ -858,10 +858,16 @@ func (j *JM) Download(ctx context.Context, cred *Cred, comicID string, orders []
 		imagesTotal += len(imgs)
 		mu.Unlock()
 
-		if n, _ := dirImageStats(dir); n >= len(imgs) {
+		if n, bytes := dirImageStats(dir); n >= len(imgs) {
 			h.log("info", fmt.Sprintf("章节《%s》已存在且完整（%d 张），跳过", ch.Title, n))
 			res.ChaptersDone++
 			res.Images += n
+			res.Bytes += bytes
+			mu.Lock()
+			imagesDone += n
+			bytesTotal += bytes
+			mu.Unlock()
+			h.chap(ChapterState{Order: ch.Order, Title: ch.Title, State: "done", Images: n, Path: dir})
 			prog(ch.Title)
 			continue
 		}
@@ -1002,6 +1008,9 @@ func (j *JM) downloadChapter(ctx context.Context, cred *Cred, photoID string, na
 
 // fetchImage 下载图片原始字节（带 1 次重试与域名切换）
 func (j *JM) fetchImage(ctx context.Context, photoID, filename string) ([]byte, error) {
+	if err := waitDownload(ctx); err != nil {
+		return nil, err
+	}
 	var lastErr error
 	domains := func() []string {
 		j.mu.Lock()

@@ -31,6 +31,14 @@ import { readerPath, openReaderWindow } from '@/utils/reader'
 
 const isMobile = useIsMobile()
 const router = useRouter()
+const trashVisible = ref(false)
+const trashItems = ref([])
+async function showTrash() {
+  try { trashItems.value = await api.trash(); trashVisible.value = true } catch (_) {}
+}
+async function restoreItem(item) {
+  try { await api.restoreTrash(item.id); ElMessage.success('已恢复'); await showTrash(); load() } catch (_) {}
+}
 const store = useAppStore()
 
 // 视图切换：卡片 / 表格，默认卡片模式
@@ -96,7 +104,7 @@ async function load() {
     items.value = []
     total.value = 0
   } finally {
-    req.end()
+    req.end(my)
     if (req.isCurrent(my)) loading.value = false
   }
 }
@@ -131,11 +139,11 @@ async function deleteItem(row) {
 async function deleteWithFiles(row) {
   try {
     await ElMessageBox.confirm(
-      `确定彻底删除《${row.title}》吗？警告：这将永久删除磁盘上的全部漫画图片与文件！`,
-      '彻底删除',
+      `确定将《${row.title}》及其文件移入回收站吗？可在回收站恢复。`,
+      '移入回收站',
       {
         type: 'error',
-        confirmButtonText: '连同文件彻底删除',
+        confirmButtonText: '移入回收站',
         cancelButtonText: '取消',
         confirmButtonClass: 'el-button--danger'
       }
@@ -147,7 +155,7 @@ async function deleteWithFiles(row) {
   deletingFiles.value = true
   try {
     await api.deleteLibrary(row.id, true)
-    ElMessage.success('文件与记录已删除')
+    ElMessage.success('已移入回收站')
     load()
   } catch (e) {
     /* api.js 已提示 */
@@ -190,6 +198,15 @@ watch(
 </script>
 
 <template>
+  <el-dialog v-model="trashVisible" title="回收站" width="min(700px, 95vw)">
+    <p class="ms-dim">移入回收站的文件仍占用磁盘空间。自动同步会跳过这些漫画，恢复后重新参与同步。</p>
+    <div v-if="!trashItems.length" class="ms-empty">回收站为空</div>
+    <div v-for="item in trashItems" :key="item.id" style="padding: 12px 0; overflow-wrap: anywhere">
+      <span>{{ item.originalPath }}</span>
+      <el-button text type="primary" @click="restoreItem(item)">恢复</el-button>
+    </div>
+  </el-dialog>
+  <el-button style="margin-bottom: 12px" @click="showTrash">回收站</el-button>
   <div class="ms-panel">
     <div class="ms-panel-title">
       <div class="title-left">
@@ -314,7 +331,7 @@ watch(
                     <el-icon><Delete /></el-icon> 移除记录
                   </el-dropdown-item>
                   <el-dropdown-item command="deleteWithFiles" divided style="color: var(--el-color-danger)">
-                    <el-icon><Delete /></el-icon> 删除文件
+                    <el-icon><Delete /></el-icon> 移入回收站
                   </el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -394,7 +411,7 @@ watch(
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="deleteItem">移除记录</el-dropdown-item>
-                <el-dropdown-item command="deleteWithFiles" divided style="color: var(--el-color-danger)">删除文件</el-dropdown-item>
+                <el-dropdown-item command="deleteWithFiles" divided style="color: var(--el-color-danger)">移入回收站</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>

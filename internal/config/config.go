@@ -2,9 +2,12 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 )
 
 // DefaultDir 是运行期数据目录的默认值，可用环境变量 MANGASYNC_HOME 或 -data 参数覆盖
@@ -52,6 +55,8 @@ type Settings struct {
 
 	Schedule   Schedule `json:"schedule"`
 	ServerPort int      `json:"serverPort"`
+	CacheMaxMB int      `json:"cacheMaxMB"`
+	MinFreeMB  int      `json:"minFreeMB"`
 }
 
 type Manager struct {
@@ -74,6 +79,7 @@ func Default() Settings {
 		Quality:      "original",
 		Schedule:     Schedule{Enabled: true, Time: "04:30"},
 		ServerPort:   8787,
+		CacheMaxMB:   2048, MinFreeMB: 512,
 	}
 }
 
@@ -125,6 +131,12 @@ func mergeSettings(dst *Settings, src Settings) {
 	if src.Quality != "" {
 		dst.Quality = src.Quality
 	}
+	if src.CacheMaxMB > 0 {
+		dst.CacheMaxMB = src.CacheMaxMB
+	}
+	if src.MinFreeMB > 0 {
+		dst.MinFreeMB = src.MinFreeMB
+	}
 	dst.Schedule = src.Schedule
 	if src.ServerPort > 0 {
 		dst.ServerPort = src.ServerPort
@@ -140,12 +152,14 @@ func (m *Manager) Get() Settings {
 // Update 用 patch 里的字段覆盖，返回合并后的设置
 func (m *Manager) Update(patch map[string]json.RawMessage) (Settings, error) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	s := m.s
-	m.mu.Unlock()
 
 	b, _ := json.Marshal(patch)
 	var p Settings
-	_ = json.Unmarshal(b, &p)
+	if err := json.Unmarshal(b, &p); err != nil {
+		return s, err
+	}
 	// 只覆盖 patch 中出现的键
 	var raw map[string]any
 	_ = json.Unmarshal(b, &raw)
@@ -184,14 +198,36 @@ func (m *Manager) Update(patch map[string]json.RawMessage) (Settings, error) {
 	if merged.DownloadRoot == "" {
 		merged.DownloadRoot = Default().DownloadRoot
 	}
+	if merged.Schedule.Enabled {
+		if _, err := time.Parse("15:04", merged.Schedule.Time); err != nil {
+			return s, fmt.Errorf("同步时间必须为 HH:mm")
+		}
+	}
+	for _, dir := range []string{merged.PicaDir, merged.JmDir} {
+		if filepath.IsAbs(dir) || dir == "." || strings.HasPrefix(filepath.Clean(dir), "..") {
+			return s, fmt.Errorf("源目录必须是下载根目录内的子目录")
+		}
+	}
+	if merged.CacheMaxMB < 64 || merged.CacheMaxMB > 1048576 || merged.MinFreeMB < 64 || merged.MinFreeMB > 1048576 {
+		return s, fmt.Errorf("缓存上限和预留空间范围为 64–1048576 MB")
+	}
 	if err := os.MkdirAll(merged.DownloadRoot, 0o755); err != nil {
 		return s, err
 	}
 
-	m.mu.Lock()
+	data, err := json.MarshalIndent(merged, "", "  ")
+	if err != nil {
+		return s, err
+	}
+	tmp := m.path + ".tmp"
+	if err = os.WriteFile(tmp, data, 0600); err != nil {
+		return s, err
+	}
+	if err = os.Rename(tmp, m.path); err != nil {
+		return s, err
+	}
 	m.s = merged
-	m.mu.Unlock()
-	return merged, m.save()
+	return merged, nil
 }
 
 func (m *Manager) save() error {

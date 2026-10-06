@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/l1280776919/mangaSync/internal/auth"
@@ -23,17 +24,25 @@ type Server struct {
 	eng     *engine.Engine
 	base    string // 缓存目录
 	limiter *auth.Limiter
+	pageMu  sync.Mutex
+	pages   map[string]*pageFlight
 }
 
 func NewServer(st *store.Store, cfg *config.Manager, eng *engine.Engine) *Server {
 	base := filepath.Join(cfg.Dir(), "cache")
 	_ = os.MkdirAll(filepath.Join(base, "covers"), 0o755)
-	return &Server{st: st, cfg: cfg, eng: eng, base: base, limiter: auth.NewLimiter()}
+	return &Server{st: st, cfg: cfg, eng: eng, base: base, limiter: auth.NewLimiter(), pages: map[string]*pageFlight{}}
 }
 
 func (s *Server) Routes() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /api/health", s.health)
+	m.HandleFunc("GET /api/reading", s.readingHistory)
+	m.HandleFunc("GET /api/reading/{kind}/{comicId}", s.getReading)
+	m.HandleFunc("PUT /api/reading/{kind}/{comicId}", s.putReading)
+	m.HandleFunc("GET /api/sync-history", s.syncHistory)
+	m.HandleFunc("GET /api/trash", s.trashList)
+	m.HandleFunc("POST /api/trash/{id}/restore", s.restoreTrash)
 	m.HandleFunc("POST /api/auth/login", s.authLogin)
 	m.HandleFunc("POST /api/auth/logout", s.authLogout)
 	m.HandleFunc("GET /api/auth/me", s.authMe)
@@ -158,11 +167,12 @@ func (s *Server) accountFor(r *http.Request, a *store.Account) (*store.Account, 
 // ---------- handlers ----------
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"status": "ok", "version": Version, "uptimeSec": int(time.Since(startedAt).Seconds())})
+	writeJSON(w, 200, map[string]any{"status": "ok", "version": Version, "commit": Commit, "uptimeSec": int(time.Since(startedAt).Seconds())})
 }
 
 var (
-	Version   = "0.1.0"
+	Version   = "0.2.0"
+	Commit    = "dev"
 	startedAt = time.Now()
 )
 
@@ -454,6 +464,20 @@ func (s *Server) delFavorite(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) comicDetail(w http.ResponseWriter, r *http.Request) {
 	kind, comicID := r.PathValue("kind"), r.PathValue("comicId")
+	if r.URL.Query().Get("local") == "1" {
+		if c, _ := s.st.GetComic(kind, comicID); c != nil && c.Path != "" {
+			if fi, err := os.Stat(c.Path); err == nil && fi.IsDir() {
+				detail := &source.Comic{Kind: kind, ComicID: comicID, Title: c.Title, Chapters: []source.Chapter{}}
+				for i := 1; i <= max(1, c.Chapters); i++ {
+					detail.Chapters = append(detail.Chapters, source.Chapter{Order: i, Title: fmt.Sprintf("第 %d 章", i)})
+				}
+				s.decorate([]*source.Comic{detail})
+				writeJSON(w, 200, detail)
+				return
+			}
+		}
+	}
+
 	var acc *store.Account
 	if accID := intQuery(r, "accountId", 0); accID > 0 {
 		acc, _ = s.st.GetAccount(int64(accID))
@@ -668,7 +692,7 @@ func (s *Server) deleteJob(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "ID 不合法")
 		return
 	}
-	if err := s.st.DeleteJob(id); err != nil {
+	if err := s.eng.DeleteJob(id); err != nil {
 		writeErr(w, 500, "%v", err)
 		return
 	}
@@ -718,18 +742,11 @@ func (s *Server) deleteLibraryItem(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "ID 不合法")
 		return
 	}
-	rec, err := s.st.DeleteComic(id)
-	if err != nil {
-		writeErr(w, 404, "记录不存在: %v", err)
+	if err := s.eng.DeleteComic(id, r.URL.Query().Get("files") == "true"); err != nil {
+		writeErr(w, 409, "%v", err)
 		return
 	}
-	if r.URL.Query().Get("files") == "true" && rec.Path != "" {
-		if err := os.RemoveAll(rec.Path); err != nil {
-			writeErr(w, 500, "删除目录失败: %v", err)
-			return
-		}
-	}
-	writeJSON(w, 200, map[string]any{"ok": true, "deletedPath": rec.Path})
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 func (s *Server) scanLibrary(w http.ResponseWriter, r *http.Request) {
@@ -751,11 +768,12 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 		favs += a.FavoritesCount
 	}
 	writeJSON(w, 200, map[string]any{
-		"accounts":  len(accs),
-		"favorites": favs,
-		"downloads": counts,
-		"library":   map[string]any{"comics": comics, "chapters": chapters, "images": images, "bytes": bytes},
-		"disk":      map[string]any{"freeBytes": free, "totalBytes": total},
+		"downloadPause": s.eng.DownloadStatus(),
+		"accounts":      len(accs),
+		"favorites":     favs,
+		"downloads":     counts,
+		"library":       map[string]any{"comics": comics, "chapters": chapters, "images": images, "bytes": bytes},
+		"disk":          map[string]any{"freeBytes": free, "totalBytes": total},
 	})
 }
 
