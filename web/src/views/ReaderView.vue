@@ -125,7 +125,7 @@
       <div class="rd-setting-group"><el-switch :model-value="dark" active-text="深色阅读背景" @change="toggleDark" /></div>
       <div class="rd-setting-group"><el-switch v-model="tapToTurn" active-text="轻点画面两侧翻页" @change="saveTapSetting" /></div>
       <p class="rd-help">{{ compact ? '上下滑动阅读，中间轻点显示菜单。支持双指缩放。' : '← / → 翻页；空格 / Shift + 空格滚动；N / P 切章；F 切换适宽与适高；Esc 显示菜单。' }}</p>
-      <p class="rd-help">{{ meta.local ? '当前章节使用本地图片' : '当前章节在线加载' }} · 阅读进度自动保存</p>
+      <p class="rd-help">{{ meta.missingPages.length ? `本地缺少 ${meta.missingPages.length} 页，缺页将在线加载` : meta.local ? '当前章节使用本地图片' : '当前章节在线加载' }} · 阅读进度自动保存</p>
       <el-button v-if="Object.keys(failed).length" @click="retryFailed">重试加载失败的图片</el-button>
     </el-drawer>
   </div>
@@ -156,7 +156,7 @@ const order = computed(() => Number(route.params.order || 1))
 
 const title = ref('')
 const chapters = ref([])
-const meta = reactive({ pages: 0, chapterTitle: '', local: false })
+const meta = reactive({ missingPages: [], pages: 0, chapterTitle: '', local: false })
 const pageList = computed(() => Array.from({ length: meta.pages }, (_, i) => i + 1))
 const loading = ref(true)
 const loadError = ref('')
@@ -287,6 +287,7 @@ async function load() {
   meta.pages = 0
   meta.chapterTitle = ''
   meta.local = false
+  meta.missingPages = []
   page.value = 1
   loading.value = true
   loadError.value = ''
@@ -318,6 +319,7 @@ async function load() {
     meta.pages = m.pages || 0
     meta.chapterTitle = m.chapterTitle || ''
     meta.local = !!m.local
+    meta.missingPages = m.missingPages || []
     // 后端返回的每页尺寸（[[w,h], ...]，缺页为 [0,0]）
     sizes.value = Array.isArray(m.sizes) ? m.sizes : []
     if (!meta.pages) {

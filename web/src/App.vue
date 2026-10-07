@@ -1,18 +1,19 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch, nextTick } from 'vue'
 import api from '@/api'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Files,
   UserFilled,
-  Expand,
   Loading,
   Clock,
-  Refresh
+  Refresh,
+  MoreFilled
 } from '@element-plus/icons-vue'
 import { useAppStore } from '@/store/app'
 import { auth } from '@/store/auth'
 import { logout } from '@/composables/useAuth'
+import { readViewState, writeViewState } from '@/utils/viewState'
 import { useIsMobile } from '@/composables/useIsMobile'
 
 const build = ref(null)
@@ -21,8 +22,8 @@ const route = useRoute()
 const router = useRouter()
 const store = useAppStore()
 
+const main = ref(null)
 const isMobile = useIsMobile()
-const drawerOpen = ref(false)
 const loggingOut = ref(false)
 
 const AUTH_PAGES = ['/login', '/change-password']
@@ -37,7 +38,8 @@ const PAGE_DESCRIPTIONS = {
  '/search': '在不同漫画源中，找到你想读的作品。',
  '/downloads': '查看同步与下载进度，处理需要重试的任务。',
  '/accounts': '管理漫画源账号与收藏同步。',
- '/settings': '按你的设备和阅读习惯调整应用。'
+ '/settings': '按你的设备和阅读习惯调整应用。',
+ '/more': '账号、设置和你的书房概览。'
 }
 const mobilePaths = ['/library', '/favorites', '/search', '/downloads']
 const MENU = NAV_PATHS.map((path) => {
@@ -53,20 +55,13 @@ const runningCount = computed(
 )
 
 
-
-watch(isMobile, (m) => {
-  if (!m) drawerOpen.value = false
-})
-
 function go(path) {
   router.push(path)
-  drawerOpen.value = false
 }
 
 async function onLogout() {
   if (loggingOut.value) return
   loggingOut.value = true
-  drawerOpen.value = false
   try {
     await logout()
   } finally {
@@ -82,8 +77,11 @@ function bootstrap() {
 
 watch(
   () => route.path,
-  () => {
-    drawerOpen.value = false
+  async (path, previous) => {
+    const el = main.value?.$el
+    if (el && previous) writeViewState(`scroll:${previous}`, { top: el.scrollTop })
+    await nextTick()
+    if (main.value?.$el) main.value.$el.scrollTop = readViewState(`scroll:${path}`).top || 0
     if (isAuthPage.value) {
       store.stopEvents()
     } else {
@@ -144,70 +142,14 @@ onMounted(async () => {
       </div>
     </el-aside>
 
-    <!-- 移动端抽屉导航 -->
-    <el-drawer
-      v-model="drawerOpen"
-      direction="ltr"
-      size="230px"
-      :with-header="false"
-      class="nav-drawer"
-    >
-      <div class="brand">
-        <div class="brand-logo-badge">
-          <el-icon :size="18"><Files /></el-icon>
-        </div>
-        <div class="brand-text">
-          <span class="brand-name">mangaSync</span>
-          <span class="brand-tag">个人书房</span>
-        </div>
-      </div>
-      <el-menu :default-active="activePath" class="app-menu" @select="go">
-        <el-menu-item v-for="m in MENU" :key="m.path" :index="m.path">
-          <el-icon><component :is="m.icon" /></el-icon>
-          <span>{{ m.title }}</span>
-          <el-badge
-            v-if="m.path === '/downloads' && runningCount"
-            :value="runningCount"
-            class="menu-badge"
-          />
-        </el-menu-item>
-      </el-menu>
-      <div class="aside-foot">
-        <div class="foot-row">
-          <el-icon class="foot-icon"><UserFilled /></el-icon>
-          <span class="foot-user ms-ellipsis" :title="username">{{ username }}</span>
-          <span class="ms-dim foot-ver">{{ build?.version || '—' }} · {{ build?.commit?.slice(0, 7) || 'dev' }}</span>
-        </div>
-        <div class="foot-row">
-          <a href="#/settings">设置</a>
-          <el-button
-            link
-            type="primary"
-            size="small"
-            :loading="loggingOut"
-            @click="onLogout"
-          >
-            退出登录
-          </el-button>
-        </div>
-      </div>
-    </el-drawer>
-
     <el-container class="app-main-wrap">
       <el-header class="app-header">
         <div class="header-left">
-          <el-button
-            v-if="isMobile"
-            text
-            :icon="'Expand'"
-            @click="drawerOpen = true"
-            aria-label="打开导航"
-          />
           <span class="header-context">mangaSync</span><span class="header-slash">/</span><span class="header-title">{{ pageTitle }}</span>
         </div>
         <div class="header-right">
 
-          <el-tooltip v-if="runningCount" :content="`${runningCount} 个任务进行中`">
+          <el-tooltip v-if="!isMobile && runningCount" :content="`${runningCount} 个任务进行中`">
             <el-button text @click="go('/downloads')">
               <el-icon>
                 <component :is="store.jobList.some((j) => j.status === 'running') ? 'Loading' : 'Clock'" />
@@ -221,7 +163,7 @@ onMounted(async () => {
         </div>
       </el-header>
 
-      <el-main class="app-main">
+      <el-main ref="main" class="app-main">
         <div class="page-content">
         <header class="page-intro">
           <div><h1>{{ route.path === '/dashboard' ? '你的漫画书房' : pageTitle }}</h1><p>{{ PAGE_DESCRIPTIONS[route.path] }}</p></div>
@@ -238,6 +180,9 @@ onMounted(async () => {
       <button v-for="m in MENU.filter(m => mobilePaths.includes(m.path))" :key="m.path" :class="{ active: activePath === m.path }" :aria-current="activePath === m.path ? 'page' : undefined" :aria-label="'前往' + m.title" @click="go(m.path)">
         <el-icon :size="21"><component :is="m.icon" /></el-icon><span>{{ m.title }}</span>
         <span v-if="m.path === '/downloads' && runningCount" class="nav-dot" aria-label="有进行中的任务"></span>
+      </button>
+      <button :class="{ active: !mobilePaths.includes(activePath) }" :aria-current="!mobilePaths.includes(activePath) ? 'page' : undefined" aria-label="前往更多" @click="go('/more')">
+        <el-icon :size="21"><MoreFilled /></el-icon><span>更多</span>
       </button>
     </nav>
   </el-container>
@@ -424,12 +369,13 @@ onMounted(async () => {
 @media (max-width: 768px) {
   .app-header {
     height: calc(56px + env(safe-area-inset-top));
-    padding-top: env(safe-area-inset-top);
-    padding: 0 10px;
+    padding: env(safe-area-inset-top) 16px 0;
     gap: 6px;
   }
 
   .app-header :deep(.el-button) {
+    min-width: 44px;
+    min-height: 44px;
     padding: 0 8px;
   }
 
@@ -449,24 +395,9 @@ onMounted(async () => {
 .page-intro-mark { font-size: 10px; letter-spacing: 2px; color: #8794a1; white-space: nowrap; }
 .header-context { font-size: 12px; color: var(--ms-text-dim); }
 .header-slash { color: var(--ms-border-strong); padding: 0 6px; }
-.mobile-nav { position: fixed; bottom: 0; left: 0; right: 0; height: calc(66px + env(safe-area-inset-bottom)); padding: 4px 12px calc(4px + env(safe-area-inset-bottom)); display: grid; grid-template-columns: repeat(4,1fr); background: var(--ms-overlay); border-top: 1px solid var(--ms-border); backdrop-filter: blur(16px); z-index: 1600; }
+.mobile-nav { position: fixed; bottom: 0; left: 0; right: 0; height: calc(66px + env(safe-area-inset-bottom)); padding: 4px 12px calc(4px + env(safe-area-inset-bottom)); display: grid; grid-template-columns: repeat(5,1fr); background: var(--ms-overlay); border-top: 1px solid var(--ms-border); backdrop-filter: blur(16px); z-index: 1600; }
 .mobile-nav button { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border: 0; border-radius: 12px; background: transparent; color: var(--ms-text-dim); font: inherit; font-size: 11px; cursor: pointer; }
 .mobile-nav button.active { color: var(--el-color-primary); background: var(--el-color-primary-light-9); font-weight: 600; }
 .nav-dot { position: absolute; width: 5px; height: 5px; background: var(--el-color-primary); top: 5px; right: calc(50% - 16px); border-radius: 50%; }
 @media (max-width: 768px) { .page-intro { margin-bottom: 20px; } .page-intro h1 { font-size: 24px; } .page-intro-mark, .header-context, .header-slash { display: none; } }
-</style>
-
-<style>
-.nav-drawer .el-drawer__body {
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  background: #ffffff;
-}
-
-.nav-drawer .el-menu-item.is-active {
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
-  font-weight: 600;
-}
 </style>

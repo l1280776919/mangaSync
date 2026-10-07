@@ -11,6 +11,7 @@ import { auth, clearSession, setSession, setUnauthorizedHandler } from '@/store/
  * - 已登录访问 /login → /dashboard
  */
 const routes = [
+  { path: '/more', name: 'more', component: () => import('@/views/MoreView.vue'), meta: { title: '更多' } },
   { path: '/', redirect: '/dashboard' },
   {
     path: '/login',

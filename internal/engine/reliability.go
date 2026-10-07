@@ -118,6 +118,9 @@ func (e *Engine) DeleteComic(id int64, files bool) error {
 	if err != nil {
 		return err
 	}
+	if e.checking[c.Kind+"/"+c.ComicID] {
+		return fmt.Errorf("该漫画正在体检，请稍后再试")
+	}
 	active, err := e.st.ActiveJobID(c.Kind, c.ComicID)
 	if err != nil {
 		return err
