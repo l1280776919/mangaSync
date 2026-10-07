@@ -54,7 +54,7 @@ onBeforeUnmount(stop)
 onDeactivated(() => { stop(); opened.value = false })
 </script>
 <template>
-  <el-dialog v-model="opened" title="书库体检" width="min(760px, 94vw)" class="health-dialog">
+  <el-dialog v-model="opened" title="书库体检" align-center width="min(760px, 94vw)" class="health-dialog">
     <p class="scope">{{ comic ? `检查《${comic.title}》` : '检查整个漫画库' }}</p>
     <p class="hint">快速检查缺页、空文件和已知旧版 GIF 异常；深度检查会逐页解码并核对已有校验值。检查不改动图片，也不访问漫画源。</p>
     <div class="health-actions">
@@ -96,4 +96,10 @@ onDeactivated(() => { stop(); opened.value = false })
 summary { cursor: pointer; padding: 8px 0 14px; }
 li { line-height: 1.8; overflow-wrap: anywhere; }
 ul { padding-left: 18px; }
+</style>
+
+<style>
+.health-dialog { display: flex; flex-direction: column; max-height: calc(100dvh - 32px); }
+.health-dialog .el-dialog__body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.health-dialog .el-dialog__header, .health-dialog .el-dialog__footer { flex-shrink: 0; }
 </style>
