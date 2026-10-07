@@ -81,6 +81,10 @@ func (s *Server) Routes() http.Handler {
 	m.HandleFunc("POST /api/downloads/sync-all", s.syncAll)
 
 	m.HandleFunc("GET /api/library", s.library)
+	m.HandleFunc("GET /api/library/health", s.libraryHealth)
+	m.HandleFunc("POST /api/library/health", s.startLibraryHealth)
+	m.HandleFunc("POST /api/library/health/{id}/cancel", s.cancelLibraryHealth)
+	m.HandleFunc("POST /api/library/{id}/repair", s.repairLibraryHealth)
 	m.HandleFunc("DELETE /api/library/{id}", s.deleteLibraryItem)
 	m.HandleFunc("POST /api/library/scan", s.scanLibrary)
 

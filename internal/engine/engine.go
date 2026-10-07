@@ -20,8 +20,10 @@ import (
 )
 
 type Engine struct {
-	st  *store.Store
-	cfg *config.Manager
+	health   healthState
+	checking map[string]bool // protected by opMu
+	st       *store.Store
+	cfg      *config.Manager
 
 	mu      sync.Mutex
 	running map[int64]context.CancelFunc
@@ -147,6 +149,9 @@ func (e *Engine) Relogin(ctx context.Context, a *store.Account) (*source.Cred, e
 func (e *Engine) Enqueue(job *store.Job) (int64, error) {
 	e.opMu.Lock()
 	defer e.opMu.Unlock()
+	if e.checking[job.Kind+"/"+job.ComicID] {
+		return 0, fmt.Errorf("该漫画正在体检，请稍后再试")
+	}
 	if blocked, err := e.st.InTrash(job.Kind, job.ComicID); err != nil {
 		return 0, err
 	} else if blocked {
@@ -187,6 +192,9 @@ func (e *Engine) Retry(id int64) error {
 	j, err := e.st.GetJob(id)
 	if err != nil {
 		return err
+	}
+	if e.checking[j.Kind+"/"+j.ComicID] {
+		return fmt.Errorf("该漫画正在体检，请稍后再试")
 	}
 	if j.Status == "running" {
 		return fmt.Errorf("任务正在运行")

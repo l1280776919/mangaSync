@@ -26,6 +26,9 @@ func validImageBytes(b []byte) bool {
 	return err == nil
 }
 func validImageFile(path string) (int64, bool) {
+	if _, err := os.Stat(path + ".repair"); err == nil {
+		return 0, false
+	}
 	b, err := os.ReadFile(path)
 	if err != nil || len(b) == 0 || (strings.EqualFold(filepath.Ext(path), ".gif") && !isGIFBytes(b)) {
 		return 0, false
@@ -157,7 +160,13 @@ func pageManifestMatches(dir string, ids []string) bool {
 }
 
 func writeImageReceipt(path string, b []byte) error {
-	return writeFileAtomic(path+".sha256", []byte(fmt.Sprintf("%x", sha256.Sum256(b))))
+	if err := writeFileAtomic(path+".sha256", []byte(fmt.Sprintf("%x", sha256.Sum256(b)))); err != nil {
+		return err
+	}
+	if err := os.Remove(path + ".repair"); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // Seed a repair staging directory only from the same page manifest.

@@ -30,7 +30,7 @@ async function fixtures(page){
 for(const device of ['desktop','mobile'])test(`UI review ${device}`,async({browser})=>{
  const context=await browser.newContext({viewport:device==='mobile'?{width:390,height:844}:{width:1440,height:1000},isMobile:device==='mobile',hasTouch:device==='mobile'})
  const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));await fixtures(page)
- for(const name of ['dashboard','favorites','library','search','downloads','accounts','settings']) {
+ for(const name of ['dashboard','favorites','library','search','downloads','accounts','settings','more']) {
   await page.goto(`http://127.0.0.1:4173/#/${name}`)
   await expect(page.locator('.app-header')).toBeVisible()
   await expect(page.locator('.el-loading-mask')).toHaveCount(0)
@@ -53,6 +53,53 @@ for(const device of ['desktop','mobile'])test(`UI review ${device}`,async({brows
   expect(overflow,`${name} horizontal overflow`).toBe(false)
   await page.screenshot({animations:'disabled',path:`${process.env.UI_REVIEW_DIR||'test-results'}/${device}-${name}.png`})
  }
- if(device==='mobile'){await page.setViewportSize({width:320,height:740});await page.getByRole('button',{name:'前往漫画库'}).click();await expect(page).toHaveURL(/library/);expect(await page.locator('.app-main').evaluate(el=>el.scrollWidth>el.clientWidth+2)).toBe(false);await page.getByRole('button',{name:'打开导航'}).click();await expect(page.locator('.nav-drawer')).toBeVisible()}
+ if(device==='mobile'){await page.setViewportSize({width:320,height:740});await page.getByRole('button',{name:'前往漫画库'}).click();await expect(page).toHaveURL(/library/);expect(await page.locator('.app-main').evaluate(el=>el.scrollWidth>el.clientWidth+2)).toBe(false);await expect(page.getByRole('button',{name:'打开导航'})).toHaveCount(0);await expect(page.locator('.nav-drawer')).toHaveCount(0);await page.getByRole('button',{name:'前往更多'}).click();await page.getByRole('button',{name:'漫画源账号 登录账号、同步收藏'}).click();await expect(page).toHaveURL(/accounts/);await expect(page.getByRole('button',{name:'前往更多'})).toHaveAttribute('aria-current','page');await page.goBack();await expect(page).toHaveURL(/more/);await expect(page.getByRole('navigation')).toHaveCount(1)}
  expect(errors).toEqual([]);await context.close()
+})
+
+test('mobile health check, repair and single navigation', async ({ browser }) => {
+ const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+ const page = await context.newPage(); await fixtures(page)
+ let report = null, repairRequests = 0, started = 0
+ await page.route('**/api/library/health', async route => {
+  if (route.request().method() === 'POST') {
+   const body = route.request().postDataJSON(); expect(body).toEqual({id: 0, deep: true}); started++
+   report = { id: 1234, status: 'done', deep: true, total: 1, processed: 1, results: [{ id: 1, title: '缺页示例', status: 'issues', pages: 2, issueCount: 1, chapters: [1], issues: [{chapter: 1, page: 2, reason: '图片缺失'}] }] }
+  }
+  await route.fulfill({ contentType: 'application/json', body: JSON.stringify(report || {}) })
+ })
+ await page.route('**/api/library/1/repair', async route => {
+  expect(route.request().postDataJSON()).toEqual({runId:1234});repairRequests++
+  report.results[0].jobId = 99
+  await route.fulfill({ status: 202, contentType: 'application/json', body: '{"id":99}' })
+ })
+ await page.goto('/#/library')
+ await page.getByRole('button', {name:'书库体检',exact:true}).click()
+ await page.getByRole('button', {name:'深度检查',exact:true}).click()
+ await expect(page.getByText('缺页示例')).toBeVisible()
+ await page.getByText('查看异常明细').click()
+ await expect(page.getByText('第 1 章 · 第 2 页：图片缺失')).toBeVisible()
+ await page.getByRole('button',{name:'修复 1 个异常章节'}).click()
+ await expect(page.getByRole('button',{name:'修复已入队'})).toBeDisabled()
+ await page.getByRole('button',{name:'关闭',exact:true}).click()
+ await page.getByRole('button', {name:'书库体检',exact:true}).click()
+ await expect(page.getByRole('button',{name:'修复已入队'})).toBeDisabled()
+ expect(started).toBe(1);expect(repairRequests).toBe(1)
+ await expect(page.getByRole('dialog',{name:'书库体检'})).toBeVisible()
+ await page.screenshot({animations:'disabled',path:'test-results/mobile-health.png'})
+ await page.setViewportSize({width:320,height:640})
+ const dialogBox = await page.getByRole('dialog',{name:'书库体检'}).boundingBox()
+ expect(dialogBox.y).toBeGreaterThanOrEqual(0)
+ expect(dialogBox.y + dialogBox.height).toBeLessThanOrEqual(640)
+ await page.getByRole('button',{name:'查看下载任务'}).click()
+ await expect(page).toHaveURL(/downloads/)
+ await expect(page.getByRole('navigation')).toHaveCount(1)
+ await expect(page.getByRole('button',{name:'打开导航'})).toHaveCount(0)
+ await page.getByRole('button',{name:'前往漫画库'}).click()
+ const input = page.getByPlaceholder('按标题 / 路径搜索')
+ await input.fill('保留筛选')
+ await page.getByRole('button',{name:'搜索',exact:true}).click()
+ await page.reload()
+ await expect(page.getByPlaceholder('按标题 / 路径搜索')).toHaveValue('保留筛选')
+ await context.close()
 })

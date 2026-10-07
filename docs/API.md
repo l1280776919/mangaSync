@@ -189,3 +189,11 @@
 - `GET /api/diagnostics`：需登录，返回网络请求聚合统计与同步状态，不含账号凭据。
 
 加密迁移与备份恢复的完整操作方式见 [运行维护说明](OPERATIONS.md)。
+
+### 书库体检
+
+- `POST /api/library/health`：`{"id":0,"deep":false}`，id=0 为全库；返回 202 和后台检查状态。已有检查运行时返回 409。
+- `GET /api/library/health`：本进程最近一轮报告，包含 id、status、deep、total、processed、current、results。单本 issues 最多展示 200 条，issueCount 为真实数量。
+- `POST /api/library/health/{id}/cancel`：停止指定轮次；已完成结果保留，未完成单本不允许修复。
+- `POST /api/library/{id}/repair`：`{"runId":检查轮次}`；核对报告、文件指纹与活动下载后，将异常章节入队，返回 202 和下载任务 id。同轮同本重复提交返回已有任务 id。
+- Reader meta 新增 `missingPages`：已知缺失的本地页码数组。`sizes` 保持页码对齐，缺页尺寸为 `[0,0]`；`pages` 包含已知缺页。

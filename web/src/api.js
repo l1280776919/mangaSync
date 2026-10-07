@@ -212,6 +212,10 @@ export const api = {
     request('/library', { query: { kind, keyword, page, pageSize, sort }, signal }),
   deleteLibrary: (id, files = false) =>
     request(`/library/${id}`, { method: 'DELETE', query: { files } }),
+  libraryHealth: () => request('/library/health'),
+  startLibraryHealth: (body) => request('/library/health', { method: 'POST', body }),
+  cancelLibraryHealth: (id) => request(`/library/health/${id}/cancel`, { method: 'POST' }),
+  repairLibrary: (id, runId) => request(`/library/${id}/repair`, { method: 'POST', body: { runId } }),
   scanLibrary: () => request('/library/scan', { method: 'POST', timeout: 300000 })
 }
 

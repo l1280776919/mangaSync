@@ -41,8 +41,21 @@ func (s *Server) readerMeta(w http.ResponseWriter, r *http.Request) {
 
 	// 本地优先：已下载的章节直接数文件，不走网络
 	if dir, ok := s.localChapterDir(kind, comicID, order); ok {
-		if files := cachedImageFiles(dir); len(files) > 0 {
+		checks, _ := s.st.Chapters(kind, comicID)
+		expected := max(checks[order].Images, source.StoredPageCount(dir, kind))
+		if files := cachedImageFiles(dir); len(files) > 0 || expected > 0 {
+			// Keep holes at their original page numbers, including a known missing tail.
+			if expected > len(files) && expected <= 5000 {
+				files = append(append([]string{}, files...), make([]string, expected-len(files))...)
+			}
 			resp["pages"] = len(files)
+			missing := []int{}
+			for i, path := range files {
+				if path == "" {
+					missing = append(missing, i+1)
+				}
+			}
+			resp["missingPages"] = missing
 			resp["local"] = true
 			resp["dir"] = dir
 			resp["sizes"] = sizesOf(files)
@@ -255,7 +268,7 @@ func (s *Server) cachedSizes(kind, comicID string, order int) [][2]int {
 			continue
 		}
 		n, err := strconv.Atoi(strings.TrimSuffix(name, filepath.Ext(name)))
-		if err != nil || n < 1 {
+		if err != nil || n < 1 || n > 5000 {
 			continue
 		}
 		if n > maxPage {
@@ -290,13 +303,14 @@ func imageSize(p string) (int, int) {
 	return cfg.Width, cfg.Height
 }
 
-// imageFilesIn 返回目录内图片文件（按名字排序，页码即序号）
+// imageFilesIn preserves sparse page numbers; empty entries are missing pages.
 func imageFilesIn(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
 	pages := map[int]string{}
+	last := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -306,15 +320,16 @@ func imageFilesIn(dir string) []string {
 			continue
 		}
 		n, err := strconv.Atoi(strings.TrimSuffix(entry.Name(), ext))
-		if err != nil || n < 1 {
+		if err != nil || n < 1 || n > 5000 {
 			continue
 		}
 		if fi, err := entry.Info(); err == nil && fi.Size() > 0 {
 			pages[n] = filepath.Join(dir, entry.Name())
+			last = max(last, n)
 		}
 	}
 	out := []string{}
-	for n := 1; pages[n] != ""; n++ {
+	for n := 1; n <= last; n++ {
 		out = append(out, pages[n])
 	}
 	return out

@@ -33,7 +33,7 @@ jobs:
           npx playwright install --with-deps chromium
           npm run test:e2e
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()
         with:
           name: browser-test-results
           path: web/test-results/

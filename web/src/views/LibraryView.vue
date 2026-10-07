@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -22,15 +22,20 @@ import { useIsMobile } from '@/composables/useIsMobile'
 import { useLatestRequest } from '@/composables/useLatestRequest'
 import { useViewActive } from '@/composables/useViewActive'
 import CoverImage from '@/components/CoverImage.vue'
+import LibraryHealthDialog from '@/components/LibraryHealthDialog.vue'
 import ComicDetailDialog from '@/components/ComicDetailDialog.vue'
 import KindTag from '@/components/KindTag.vue'
 import PageBar from '@/components/PageBar.vue'
 import StatCard from '@/components/StatCard.vue'
 import { KIND_OPTIONS, formatBytes, formatTime, fromNow } from '@/utils/format'
+import { readViewState, writeViewState } from '@/utils/viewState'
 import { readerPath, openReaderWindow } from '@/utils/reader'
 
 const isMobile = useIsMobile()
 const router = useRouter()
+const healthVisible = ref(false)
+const healthComic = ref(null)
+function showHealth(row = null) { healthComic.value = row; healthVisible.value = true }
 const trashVisible = ref(false)
 const trashItems = ref([])
 async function showTrash() {
@@ -42,7 +47,8 @@ async function restoreItem(item) {
 const store = useAppStore()
 
 // 视图切换：卡片 / 表格，默认卡片模式
-const viewMode = ref('card')
+const savedView = readViewState('library')
+const viewMode = ref(savedView.viewMode === 'table' ? 'table' : 'card')
 
 // 详情弹窗
 const detailVisible = ref(false)
@@ -63,11 +69,11 @@ function openReader(row, order = 1) {
   openReaderWindow(row, order)
 }
 
-const kind = ref('')
-const keyword = ref('')
-const sort = ref('time')
-const page = ref(1)
-const pageSize = ref(20)
+const kind = ref(['jm', 'pica'].includes(savedView.kind) ? savedView.kind : '')
+const keyword = ref(typeof savedView.keyword === 'string' ? savedView.keyword : '')
+const sort = ref(savedView.sort === 'size' ? 'size' : 'time')
+const page = ref(Number.isInteger(savedView.page) && savedView.page > 0 ? savedView.page : 1)
+const pageSize = ref([20, 40, 60, 100].includes(savedView.pageSize) ? savedView.pageSize : 20)
 const total = ref(0)
 const items = ref([])
 const stats = ref(null)
@@ -81,6 +87,10 @@ const sortOptions = [
   { value: 'size', label: '按大小' }
 ]
 
+watch([kind, keyword, sort, page, pageSize, viewMode], () => {
+  writeViewState('library', { kind: kind.value, keyword: keyword.value, sort: sort.value, page: page.value, pageSize: pageSize.value, viewMode: viewMode.value })
+})
+let restoreScroll = true
 const req = useLatestRequest()
 
 async function load() {
@@ -99,6 +109,14 @@ async function load() {
     items.value = res?.items || []
     total.value = Number(res?.total) || 0
     if (res?.stats) stats.value = res.stats
+    if (restoreScroll) {
+      await nextTick()
+      if (req.isCurrent(my) && active.value) {
+        const main = document.querySelector('.app-main')
+        if (main) main.scrollTop = readViewState('scroll:/library').top || 0
+        restoreScroll = false
+      }
+    }
   } catch (e) {
     if (e?.name === 'AbortError' || !req.isCurrent(my)) return
     items.value = []
@@ -166,7 +184,8 @@ async function deleteWithFiles(row) {
 }
 
 function handleCmd(cmd, row) {
-  if (cmd === 'deleteItem') deleteItem(row)
+  if (cmd === 'check') showHealth(row)
+  else if (cmd === 'deleteItem') deleteItem(row)
   else if (cmd === 'deleteWithFiles') deleteWithFiles(row)
   else if (cmd === 'detail') openDetail(row)
 }
@@ -187,7 +206,7 @@ async function rescan() {
 
 const sizeText = computed(() => formatBytes(stats.value?.bytes))
 
-const active = useViewActive({ onEnter: load })
+const active = useViewActive({ onEnter: () => { restoreScroll = true; load() } })
 
 watch(
   () => store.refreshTick,
@@ -198,6 +217,7 @@ watch(
 </script>
 
 <template>
+  <LibraryHealthDialog v-model="healthVisible" :comic="healthComic" />
   <el-dialog v-model="trashVisible" title="回收站" width="min(700px, 95vw)">
     <p class="ms-dim">移入回收站的文件仍占用磁盘空间。自动同步会跳过这些漫画，恢复后重新参与同步。</p>
     <div v-if="!trashItems.length" class="ms-empty">回收站为空</div>
@@ -213,6 +233,7 @@ watch(
         <span class="ms-sub">· 共 {{ total }} 部</span>
       </div>
       <div class="head-actions">
+        <el-button size="small" @click="showHealth()">书库体检</el-button>
         <el-button size="small" @click="showTrash">回收站</el-button>
         <div v-if="!isMobile" class="view-switch">
           <el-radio-group v-model="viewMode" size="small">
@@ -331,7 +352,8 @@ watch(
                   <el-dropdown-item command="detail">
                     <el-icon><InfoFilled /></el-icon> 查看详情
                   </el-dropdown-item>
-                  <el-dropdown-item command="deleteItem">
+                  <el-dropdown-item command="check">检查与修复</el-dropdown-item>
+                <el-dropdown-item command="deleteItem">
                     <el-icon><Delete /></el-icon> 移除记录
                   </el-dropdown-item>
                   <el-dropdown-item command="deleteWithFiles" divided style="color: var(--el-color-danger)">
@@ -414,6 +436,7 @@ watch(
             </el-button>
             <template #dropdown>
               <el-dropdown-menu>
+                <el-dropdown-item command="check">检查与修复</el-dropdown-item>
                 <el-dropdown-item command="deleteItem">移除记录</el-dropdown-item>
                 <el-dropdown-item command="deleteWithFiles" divided style="color: var(--el-color-danger)">移入回收站</el-dropdown-item>
               </el-dropdown-menu>
@@ -621,4 +644,8 @@ watch(
  .library-toolbar > .grow, .library-toolbar > .el-button { grid-column: 1 / 3; }
  .library-toolbar > * { min-width: 0; }
 }
+</style>
+
+<style scoped>
+@media(max-width:768px) { .ms-panel-title { flex-wrap: wrap; } .head-actions { width: 100%; flex-wrap: wrap; gap: 8px; } .head-actions :deep(.el-button) { margin-left: 0; min-height: 40px; } }
 </style>
